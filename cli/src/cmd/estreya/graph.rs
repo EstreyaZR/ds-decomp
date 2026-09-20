@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Args;
-use ds_decomp::{analysis::references::Graph, config::config::Config};
+use ds_decomp::{analysis::graph::Graph, config::config::Config};
 #[derive(Args)]
 pub struct EstreyaComGraphArgs {
     #[arg(long, short = 'c')]

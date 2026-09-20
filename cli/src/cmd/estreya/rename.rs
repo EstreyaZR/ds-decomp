@@ -29,8 +29,7 @@ impl EstreyaComRenameArgs {
             };
             log::info!("{old_name} found in {module} at {:#?}!", full.1.addr);
             let symbol = full.1;
-            let rename = symbol_map.rename_by_address(symbol.addr, &*self.new_name)?;
-            assert!(rename == true);
+            let _rename = symbol_map.rename_by_address(symbol.addr, &self.new_name)?;
         }
         symbol_maps.to_files(&config, config_path)?;
         Ok(())

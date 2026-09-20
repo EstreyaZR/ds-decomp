@@ -4,11 +4,11 @@ pub mod exception;
 mod function_branch;
 mod function_start;
 pub mod functions;
+pub mod graph;
 mod illegal_code;
 mod inline_table;
 pub mod jump_table;
 pub(crate) mod main;
-pub mod references;
 pub mod secure_area;
 
 pub use data::FindLocalDataError;

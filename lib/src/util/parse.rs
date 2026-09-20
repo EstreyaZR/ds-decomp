@@ -16,14 +16,6 @@ pub fn parse_u16(text: &str) -> Result<u16, ParseIntError> {
     }
 }
 
-pub fn parse_u8(text: &str) -> Result<u8, ParseIntError> {
-    if let Some(hex) = text.strip_prefix("0x") {
-        u8::from_str_radix(hex, 16)
-    } else {
-        u8::from_str_radix(text, 10)
-    }
-}
-
 pub fn parse_i64(text: &str) -> Result<i64, ParseIntError> {
     let (negative, value) = text.strip_prefix('-').map_or((false, text), |abs| (true, abs));
     let abs_value = if let Some(hex) = value.strip_prefix("0x") {
