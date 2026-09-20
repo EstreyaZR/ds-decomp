@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use ds_decomp_cli::cmd::{
-    Apply, CheckArgs, Delink, DiffArgs, Disassemble, DumpArgs, FixArgs, Format, ImportArgs, Init,
-    JsonArgs, Lcf, Objdiff, RomArgs, SigArgs,
+    Apply, CheckArgs, Delink, DiffArgs, Disassemble, DumpArgs, EstreyaArgs, FixArgs, Format,
+    ImportArgs, Init, JsonArgs, Lcf, Objdiff, RomArgs, SigArgs,
 };
 use env_logger::WriteStyle;
 use log::LevelFilter;
@@ -25,22 +25,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Apply(Apply),
+    Check(CheckArgs),
+    Delink(Delink),
+    Diff(DiffArgs),
     #[command(name = "dis")]
     Disassemble(Disassemble),
-    Delink(Delink),
-    Init(Init),
-    Rom(RomArgs),
-    Lcf(Lcf),
-    Import(ImportArgs),
-    Check(CheckArgs),
-    Objdiff(Objdiff),
-    Fix(FixArgs),
-    Apply(Apply),
     Dump(DumpArgs),
-    Json(JsonArgs),
-    Sig(SigArgs),
+    Fix(FixArgs),
     Format(Format),
-    Diff(DiffArgs),
+    Import(ImportArgs),
+    Init(Init),
+    Json(JsonArgs),
+    Lcf(Lcf),
+    Rom(RomArgs),
+    Objdiff(Objdiff),
+    Sig(SigArgs),
+
+    Estreya(EstreyaArgs),
 }
 
 impl Command {
@@ -61,6 +63,7 @@ impl Command {
             Command::Sig(sig) => sig.run(),
             Command::Format(format) => format.run(),
             Command::Diff(diff) => diff.run(),
+            Command::Estreya(estreya) => estreya.run(),
         }
     }
 

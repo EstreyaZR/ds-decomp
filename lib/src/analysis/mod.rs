@@ -8,6 +8,7 @@ mod illegal_code;
 mod inline_table;
 pub mod jump_table;
 pub(crate) mod main;
+pub mod references;
 pub mod secure_area;
 
 pub use data::FindLocalDataError;

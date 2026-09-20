@@ -119,7 +119,7 @@ pub enum ModuleError {
 }
 
 pub const ENTRY_FN_SYMBOL_NAME: &str = "Entry";
-pub const MAIN_FN_SYMBOL_NAME: &str = "main";
+pub const MAIN_FN_SYMBOL_NAME: &str = "Main";
 pub const BUILD_INFO_SYMBOL_NAME: &str = "BuildInfo";
 pub const AUTOLOAD_CALLBACK_SYMBOL_NAME: &str = "AutoloadCallback";
 pub const OVERLAY_SIGNATURES_SYMBOL_NAME: &str = "OverlaySignatures";

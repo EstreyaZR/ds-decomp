@@ -167,10 +167,16 @@ pub enum SymbolMapError {
     DuplicateName { name: String, new_address: u32, old_address: u32, backtrace: Backtrace },
     #[snafu(display("no symbol at {address:#010x} to rename to '{new_name}':\n{backtrace}"))]
     NoSymbolToRename { address: u32, new_name: String, backtrace: Backtrace },
+    #[snafu(display("no symbol named {old_name} to rename to '{new_name}':\n{backtrace}"))]
+    NoNameToRename { old_name: String, new_name: String, backtrace: Backtrace },
     #[snafu(display(
         "there must be exactly one symbol at {address:#010x} to rename to '{new_name}':\n{backtrace}"
     ))]
     RenameMultiple { address: u32, new_name: String, backtrace: Backtrace },
+    #[snafu(display(
+        "there must be exactly one symbol named {old_name} to rename to '{new_name}':\n{backtrace}"
+    ))]
+    RenameMultipleNames { old_name: String, new_name: String, backtrace: Backtrace },
 }
 
 impl SymbolMap {
@@ -315,11 +321,6 @@ impl SymbolMap {
 
     pub fn iter(&self) -> impl Iterator<Item = &'_ Symbol> {
         self.symbols_by_address.values().flat_map(|ids| ids.iter()).map(|&id| self.get(id).unwrap())
-    }
-
-    #[deprecated(note = "use ids_by_address instead")]
-    pub fn indices_by_address(&self) -> impl Iterator<Item = &SymbolId> {
-        self.ids_by_address()
     }
 
     pub fn ids_by_address(&self) -> impl Iterator<Item = &SymbolId> {
@@ -681,6 +682,18 @@ impl SymbolMap {
 
         Ok(true)
     }
+
+    // pub fn rename_by_name(
+    //     &mut self,
+    //     old_name: &str,
+    //     new_name: &str,
+    // ) -> Result<bool, SymbolMapError> {
+    //     let symbols_ids = self
+    //         .symbols_by_address
+    //         .get(&old_name)
+    //         .ok_or_else(|| NoNameToRenameSnafu { old_name, new_name }.build())?;
+    //     ensure!(symbols_ids.len() == 1, RenameMultipleNamesSnafu { old_name, new_name });
+    // }
 
     pub fn remove(&mut self, id: SymbolId) -> Option<Symbol> {
         let symbol = self.symbols.remove(id)?;
