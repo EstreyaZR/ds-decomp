@@ -15,7 +15,7 @@ log = "0.4"
 serde = "1.0"
 serde-saphyr = "0.0"
 snafu = { version = "0.8", features = ["backtrace"] }
-strum = "0.28.0"
+strum = {version = "0.28.0", features = ["derive"]}
 strum_macros = "0.28.0"
 unarm = { version = "2.2", default-features = false, features = [
     "arm",
