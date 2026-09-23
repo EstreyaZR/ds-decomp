@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args;
 use ds_decomp::{
-    analysis::graph::{Graph, GraphNodes, GraphParser},
+    analysis::graph::{Graph, GraphParserOptions},
     config::config::Config,
 };
 
@@ -23,27 +23,27 @@ impl EstreyaComGraphArgs {
         let _config = Config::from_file(&self.config_path)?;
         let _config_path = self.config_path.parent().unwrap();
         if let Ok(nodes) = Self::dir_crawler(&self.asm_dir) {
-            Graph::with_graph_nodes(nodes);
+            let mut graph = Graph::from_files(GraphParserOptions::default(), nodes);
+            graph.update_rc();
+            graph.tags();
+            graph.print();
         }
         Ok(())
     }
 
-    pub fn dir_crawler(path: &PathBuf) -> Result<GraphNodes> {
-        let mut vec = GraphNodes::default();
+    pub fn dir_crawler(path: &PathBuf) -> Result<Vec<PathBuf>> {
+        let mut vec = Vec::<PathBuf>::default();
 
         let dir = read_dir(path).unwrap();
         for file in dir {
             let file = file.unwrap();
             let path = file.path();
             if path.is_dir() {
-                if let Ok(nodes) = Self::dir_crawler(&path) {
-                    vec.0.extend(nodes);
+                if let Ok(paths) = Self::dir_crawler(&path) {
+                    vec.extend(paths);
                 }
             } else {
-                let entries = GraphParser::parse(path).unwrap();
-                let nodes = entries.to_nodes();
-                let nodes = nodes.resolve_labels();
-                vec.0.extend(nodes.0);
+                vec.push(path);
             }
         }
         Ok(vec)
