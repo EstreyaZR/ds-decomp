@@ -5,10 +5,7 @@ use std::{
 use snafu::Whatever;
 use strum::EnumString;
 
-use crate::{
-    analysis::graph::GraphNodeTreeType::Node,
-    util::{io::read_to_string, parse::parse_u16},
-};
+use crate::util::{io::read_to_string, parse::parse_u16};
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Graph {
     options: AsmParserOptions,
@@ -58,7 +55,7 @@ impl Display for GraphNodeWord {
                 s.push_str(&format!("{:#x}", num));
             }
             Self::Symbol(x) => {
-                s.push_str(&format!("{}", x));
+                s.push_str(&x.to_string());
             }
         }
         f.write_str(s.as_str())
@@ -324,10 +321,10 @@ impl GraphNode {
     fn is_file(&self) -> Option<GraphFileType> {
         let s = self.byte_as_str.join("");
         if let Some(s) = s
-            .trim_end_matches(|x: char| x == b' ' as char || x == '\0')
+            .trim_end_matches([b' ' as char, '\0'])
             .to_lowercase()
-            .split(|x| x == '.')
-            .last()
+            .split('.')
+            .next_back()
         {
             return GraphFileType::from_str(s).ok();
         }
@@ -405,7 +402,7 @@ impl Graph {
 
     pub fn called_by_debug(&mut self) {
         for i in &self.nodes {
-            println!("{}\t{}", &i.1.called_by.len(), &i.0);
+            println!("{}\t{}", i.1.called_by.len(), i.0);
         }
     }
 
@@ -458,8 +455,7 @@ impl Graph {
                         };
                     };
                     cond
-                })
-                .map(|x| x.clone())
+                }).cloned()
                 .collect();
             node.update_tree();
         }
@@ -490,11 +486,10 @@ impl Graph {
         log::info!("Collected Groups");
         let mut counter_collected = 0;
         for (name, after_grouping) in nodes_mut.iter() {
-            if let Some(before_grouping) = self.nodes.get(name) {
-                if after_grouping != before_grouping {
+            if let Some(before_grouping) = self.nodes.get(name)
+                && after_grouping != before_grouping {
                     counter_collected += 1;
                 }
-            }
         }
         log::info!("{} Nodes differ from the Source Collection", counter_collected);
         log::info!(
@@ -605,12 +600,12 @@ mod asm {
                     x => Some(x.to_string()),
                 };
                 println!("{word:#?}");
-                return Ok(Some(Self { label, word, ..Default::default() }));
+                Ok(Some(Self { label, word, ..Default::default() }))
             } else {
                 if let Some(name) = source[0].strip_suffix(":") {
-                    return Ok(Some(Self { name: Some(name.to_string()), ..Default::default() }));
+                    Ok(Some(Self { name: Some(name.to_string()), ..Default::default() }))
                 } else {
-                    return Ok(None);
+                    Ok(None)
                 }
             }
         }
@@ -628,11 +623,7 @@ mod asm {
         }
 
         pub(super) fn word_as_graph_node_word(&self) -> Option<GraphNodeWord> {
-            if let Some(word) = &self.word {
-                Some(word.to_string().into())
-            } else {
-                None
-            }
+            self.word.as_ref().map(|word| word.to_string().into())
         }
     }
 
