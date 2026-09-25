@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args;
 use ds_decomp::{
-    analysis::graph::{Graph, GraphParserOptions},
+    analysis::graph::{AsmParserOptions, Graph},
     config::config::Config,
 };
 
@@ -23,10 +23,13 @@ impl EstreyaComGraphArgs {
         let _config = Config::from_file(&self.config_path)?;
         let _config_path = self.config_path.parent().unwrap();
         if let Ok(nodes) = Self::dir_crawler(&self.asm_dir) {
-            let mut graph = Graph::from_files(GraphParserOptions::default(), nodes);
+            let mut graph = Graph::from_files(AsmParserOptions::default(), nodes);
             graph.update_rc();
             graph.tags();
-            graph.print();
+            graph.called_by();
+            // graph.called_by_debug();
+            graph.group();
+            graph.group_print();
         }
         Ok(())
     }

@@ -1,19 +1,22 @@
 use std::{
-    collections::BTreeMap, default, fmt::Display, io::Write, path::Path, rc::Rc, str::FromStr,
-    vec::IntoIter,
+    collections::BTreeMap, fmt::Display, io::Write, path::Path, rc::Rc, str::FromStr, vec::IntoIter,
 };
 
 use snafu::Whatever;
 use strum::EnumString;
 
-use crate::util::{io::read_to_string, parse::parse_u16};
+use crate::{
+    analysis::graph::GraphNodeTreeType::Node,
+    util::{io::read_to_string, parse::parse_u16},
+};
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Graph {
-    options: GraphParserOptions,
+    options: AsmParserOptions,
     nodes: BTreeMap<Rc<GraphNodeWord>, GraphNode>,
+    grouped_nodes: BTreeMap<Rc<GraphNodeWord>, GraphNode>,
 }
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
-pub struct GraphParserOptions {
+pub struct AsmParserOptions {
     split_into_files: bool,
 }
 
@@ -125,6 +128,16 @@ impl IntoIterator for GraphNodes {
         self.0.into_iter()
     }
 }
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+enum GraphNodeTreeType {
+    #[default]
+    Init,
+    Orphan,
+    LeafSimple,
+    LeafMult,
+    Root,
+    Node,
+}
 
 impl GraphNodes {
     fn push(&mut self, item: GraphNode) {
@@ -168,10 +181,11 @@ pub struct GraphNode {
     byte_as_str: Vec<String>,
     word: Vec<Rc<GraphNodeWord>>,
     called_by: Vec<Rc<GraphNodeWord>>,
+    tree_type: GraphNodeTreeType,
 }
 
 impl GraphNode {
-    fn from_entry(entry: GraphEntry) -> Self {
+    fn from_entry(entry: AsmEntry) -> Self {
         let name = match &entry.name {
             Some(x) => x.to_string(),
             None => String::new(),
@@ -193,7 +207,7 @@ impl GraphNode {
         Self { name: Rc::new(name.into()), label, byte, byte_as_str, ..Default::default() }
     }
 
-    fn consume_entry(self, entry: GraphEntry) -> Self {
+    fn consume_entry(self, entry: AsmEntry) -> Self {
         assert!(entry.name.is_none(), "Entry: {:#?} did not pass no-name check", entry);
         let name = self.name;
         let mut byte = self.byte;
@@ -351,208 +365,15 @@ impl GraphNode {
         }
         self.word = dependencies;
     }
-}
 
-/// Struct that is built by every symbol / label declaration with form `"NAME: Option<WORD>"`
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
-pub struct GraphEntry {
-    name: Option<String>,
-    label: bool,
-    /// None: Symbol is a Label to jump to, used in goto, etc...
-    /// Some: Contains a Word Directive
-    ///
-    /// Example of Behaviour:
-    /// ```
-    /// ".L_0x1234:" => None,
-    /// ".L_0x6767: .word data_importantData" => Some(data_importantData),
-    /// ```
-    byte: Option<Vec<u16>>,
-    byte_as_str: Option<String>,
-    // TODO: Add Kind of Word; e.g. Numerical or Symbol
-    word: Option<String>,
-}
-
-impl GraphEntry {
-    /// Assumes not to fail from input
-    pub fn from_str(source: &str) -> Result<Option<Self>, Whatever> {
-        let source: Vec<&str> = source.split_whitespace().collect();
-        if source.len() == 3 && source[1].contains(".space") {
-            let name = Some(source[0].strip_suffix(":").unwrap().to_string());
-            return Ok(Some(Self { name, ..Default::default() }));
-        }
-        // Check for Label-leading Symbols
-        if source[0].contains(".L_") {
-            if source.len() == 1 || source.len() == 4 {
-                return Ok(None);
-            }
-            let label = true;
-            let name = Some(source[0].strip_suffix(":").unwrap().to_string());
-            let word = Some(source[2].to_string());
-            return Ok(Some(Self { name, label, word, ..Default::default() }));
-        }
-        // Check for Data Symbols with byte
-        if source[0].contains(".byte") {
-            let byte: Vec<u16> = match source.len() {
-                1 => vec![parse_u16(source[1]).unwrap()],
-                2.. => source[1..]
-                    .iter()
-                    .map(|x| {
-                        if x.contains(",") {
-                            parse_u16(x.strip_suffix(",").unwrap()).unwrap()
-                        } else {
-                            parse_u16(x).unwrap()
-                        }
-                    })
-                    .collect(),
-                0 => unreachable!(),
-            };
-
-            let byte_string = String::from_utf16(byte.clone().as_slice()).unwrap();
-            Ok(Some(Self {
-                byte: Some(byte),
-                byte_as_str: Some(byte_string),
-                ..Default::default()
-            }))
-        } else if source[0].contains(".word") {
-            let word: Option<String> = Some(source[1].into());
-            Ok(Some(Self { word, ..Default::default() }))
-        } else if source[0].starts_with("b")
-            && !source[1].starts_with(".L_")
-            && (!source[0].starts_with("bx") && source.len() == 1)
-        {
-            let label = true;
-            let word = match source[1] {
-                "r0" | "r1" | "r2" | "r3" | "r4" | "r5" | "r6" | "r7" | "r8" | "lr" | "ip"
-                | "pc" => None,
-                x => Some(x.to_string()),
-            };
-            println!("{word:#?}");
-            return Ok(Some(Self { label, word, ..Default::default() }));
-        } else {
-            if let Some(name) = source[0].strip_suffix(":") {
-                return Ok(Some(Self { name: Some(name.to_string()), ..Default::default() }));
-            } else {
-                return Ok(None);
-            }
-        }
-    }
-
-    fn byte_as_str(&self) -> String {
-        if let Some(byte_as_str) = &self.byte_as_str {
-            byte_as_str.to_string()
-        } else {
-            String::new()
-        }
-    }
-
-    fn byte(&self) -> Vec<u16> {
-        if let Some(byte) = &self.byte { byte.to_owned() } else { Vec::new() }
-    }
-
-    fn word_as_graph_node_word(&self) -> Option<GraphNodeWord> {
-        if let Some(word) = &self.word {
-            Some(word.to_string().into())
-        } else {
-            None
-        }
-    }
-}
-
-impl Display for GraphEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut output = String::new();
-
-        if let Some(name) = &self.name {
-            output.push_str(format!("{}\tLabel:{}\n", name, self.label).as_str());
-        } else {
-            output.push_str(format!("N/A\tLabel: {}\n", self.label).as_str());
-        }
-        if let Some(byte) = &self.byte {
-            output.push_str(format!("Data:\t\t{:x?}\n", byte).as_str());
-        }
-        if let Some(byte) = &self.byte_as_str {
-            output.push_str(format!("AsString:\t\t{}\n", byte).as_str());
-        }
-
-        output.fmt(f)
-    }
-}
-
-/// Simple Vector Collection for [GraphEntry]
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct GraphEntries(Vec<GraphEntry>);
-
-impl GraphEntries {
-    fn add(&mut self, x: GraphEntry) {
-        self.0.push(x)
-    }
-
-    pub fn to_nodes(self) -> GraphNodes {
-        let mut entries = GraphNodes::default();
-
-        let mut node = GraphNode {
-            name: Rc::new(GraphNodeWord::from("GRAPH_DUMMY_START".to_string())),
-            ..Default::default()
+    fn update_tree(&mut self) {
+        self.tree_type = match (self.called_by.len(), self.word.len()) {
+            (0, 0) => GraphNodeTreeType::Orphan,
+            (1, 0) => GraphNodeTreeType::LeafSimple,
+            (2.., 0) => GraphNodeTreeType::LeafMult,
+            (0, 1..) => GraphNodeTreeType::Root,
+            (1.., 1..) => GraphNodeTreeType::Node,
         };
-
-        for entry in self.into_iter() {
-            node = match entry.name.is_some() {
-                true => {
-                    node.clean();
-                    entries.push(node);
-                    GraphNode::from_entry(entry)
-                }
-                false => node.consume_entry(entry),
-            }
-        }
-
-        entries.push(node);
-
-        entries
-    }
-}
-
-impl IntoIterator for GraphEntries {
-    type IntoIter = IntoIter<Self::Item>;
-    type Item = GraphEntry;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct GraphParser;
-
-/// Parses a ASM File line-by-line to [GraphEntry], creating the collection [GraphEntries]
-impl GraphParser {
-    pub fn parse<P: AsRef<Path>>(
-        file: P,
-        _options: &GraphParserOptions,
-    ) -> Result<GraphEntries, Whatever> {
-        let file = file.as_ref();
-        let buffer = read_to_string(file).unwrap();
-        let lines = buffer.lines();
-
-        // filter everything except definitions, words and bytes
-        let lines: Vec<_> = lines
-            .filter(|line| {
-                line.contains(":")
-                    | line.contains(".word")
-                    | line.contains(".byte")
-                    | line.contains(".space")
-                    | line.trim_start().starts_with("b")
-            })
-            .collect();
-
-        let mut defs = GraphEntries::default();
-        for def_line in lines {
-            if let Some(def) = GraphEntry::from_str(def_line).unwrap() {
-                defs.add(def);
-            }
-        }
-
-        Ok(defs)
     }
 }
 
@@ -576,29 +397,120 @@ impl Graph {
         }
     }
 
-    pub fn group(&mut self) {
-        let mut nodes_to_group: BTreeMap<Rc<GraphNodeWord>, Rc<GraphNodeWord>> =
-            BTreeMap::default();
-
-        for (word, node) in self.nodes.iter_mut() {
-            if let Some(found_node) = nodes_to_group.get(word) {
-            } else {
-                if node.called_by.len() == 1 {
-                    nodes_to_group.insert(node.name.clone(), node.called_by[0].clone());
-                } else if node.called_by.len() == 0 {
-                    nodes_to_group
-                        .insert(node.name.clone(), Rc::new("ROOT_OR_ORPHAN".to_string().into()));
-                }
-            }
+    pub fn group_print(&self) {
+        for i in self.grouped_nodes.values() {
+            i.print()
         }
     }
 
-    pub fn from_files<P: AsRef<Path>>(options: GraphParserOptions, files: Vec<P>) -> Self {
+    pub fn called_by_debug(&mut self) {
+        for i in &self.nodes {
+            println!("{}\t{}", &i.1.called_by.len(), &i.0);
+        }
+    }
+
+    pub fn called_by(&mut self) {
+        let mut callee_and_callers: BTreeMap<Rc<GraphNodeWord>, Vec<Rc<GraphNodeWord>>> =
+            BTreeMap::default();
+        for node in self.nodes.values() {
+            for i in node.children() {
+                if let Some(child) = callee_and_callers.get(&i) {
+                    let mut child = child.clone();
+                    child.push(i.clone());
+                    callee_and_callers.insert(i, child);
+                } else {
+                    callee_and_callers.insert(i, vec![node.name.clone()]);
+                }
+            }
+        }
+        for (name, node) in self.nodes.iter_mut() {
+            if let Some(callers) = callee_and_callers.get(name) {
+                node.called_by = callers.clone();
+            }
+        }
+        log::info!("Added Called By");
+    }
+
+    fn init_deps(&mut self) {
+        for node in self.nodes.values_mut() {
+            node.update_tree();
+        }
+    }
+
+    fn group_iterate(
+        mut nodes: BTreeMap<Rc<GraphNodeWord>, GraphNode>,
+    ) -> BTreeMap<Rc<GraphNodeWord>, GraphNode> {
+        let lookup_table = nodes.clone();
+        for node in nodes.values_mut() {
+            node.word = node
+                .word
+                .iter()
+                .filter(|&x| {
+                    let mut cond = false;
+                    if let Some(child) = lookup_table.get(x) {
+                        cond = match child.tree_type {
+                            GraphNodeTreeType::LeafSimple
+                            | GraphNodeTreeType::Init
+                            | GraphNodeTreeType::Orphan => false,
+                            GraphNodeTreeType::LeafMult
+                            | GraphNodeTreeType::Root
+                            | GraphNodeTreeType::Node => true,
+                        };
+                    };
+                    cond
+                })
+                .map(|x| x.clone())
+                .collect();
+            node.update_tree();
+        }
+        nodes
+            .iter()
+            .filter(|(_x, y)| {
+                y.tree_type == GraphNodeTreeType::Root
+                    || y.tree_type == GraphNodeTreeType::LeafMult
+                    || y.tree_type == GraphNodeTreeType::Node
+            })
+            .map(|(x, y)| (x.clone(), y.clone()))
+            .collect()
+    }
+
+    pub fn group(&mut self) {
+        self.init_deps();
+        let mut nodes_mut: BTreeMap<_, _> =
+            self.nodes.clone().into_iter().map(|(x, y)| (x, y.clone())).collect();
+
+        let mut counter = 10;
+        while counter > 0 {
+            log::info!("Grouping Iteration {counter}");
+            let new_nodes = Self::group_iterate(nodes_mut);
+            counter -= 1;
+            nodes_mut = new_nodes.clone();
+        }
+
+        log::info!("Collected Groups");
+        let mut counter_collected = 0;
+        for (name, after_grouping) in nodes_mut.iter() {
+            if let Some(before_grouping) = self.nodes.get(name) {
+                if after_grouping != before_grouping {
+                    counter_collected += 1;
+                }
+            }
+        }
+        log::info!("{} Nodes differ from the Source Collection", counter_collected);
+        log::info!(
+            "With {} Total Symbols, and {} true Graph Nodes",
+            self.nodes.len(),
+            nodes_mut.len()
+        );
+        self.grouped_nodes = nodes_mut;
+    }
+
+    pub fn from_files<P: AsRef<Path>>(options: AsmParserOptions, files: Vec<P>) -> Self {
         let mut entries_vec = GraphNodes::default();
         let mut nodes: BTreeMap<Rc<GraphNodeWord>, GraphNode> = BTreeMap::default();
 
         for i in files.iter() {
-            let entries = GraphParser::parse(i, &options).unwrap();
+            let entries = AsmParser::parse(i, &options).unwrap();
             // for i in entries {
             //     if i.label
             // }
@@ -611,6 +523,214 @@ impl Graph {
             nodes.insert(i.name.clone(), i);
         }
 
-        Graph { options, nodes }
+        Graph { options, nodes, grouped_nodes: BTreeMap::new() }
+    }
+}
+
+use asm::*;
+
+mod asm {
+    use super::*;
+    /// Struct that is built by every symbol / label declaration with form `"NAME: Option<WORD>"`
+    #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
+    pub struct AsmEntry {
+        pub(super) name: Option<String>,
+        pub(super) label: bool,
+        /// None: Symbol is a Label to jump to, used in goto, etc...
+        /// Some: Contains a Word Directive
+        ///
+        /// Example of Behaviour:
+        /// ```
+        /// ".L_0x1234:" => None,
+        /// ".L_0x6767: .word data_importantData" => Some(data_importantData),
+        /// ```
+        pub(super) byte: Option<Vec<u16>>,
+        pub(super) byte_as_str: Option<String>,
+        // TODO: Add Kind of Word; e.g. Numerical or Symbol
+        pub(super) word: Option<String>,
+    }
+
+    impl AsmEntry {
+        /// Assumes not to fail from input
+        pub(super) fn from_str(source: &str) -> Result<Option<Self>, Whatever> {
+            let source: Vec<&str> = source.split_whitespace().collect();
+            if source.len() == 3 && source[1].contains(".space") {
+                let name = Some(source[0].strip_suffix(":").unwrap().to_string());
+                return Ok(Some(Self { name, ..Default::default() }));
+            }
+            // Check for Label-leading Symbols
+            if source[0].contains(".L_") {
+                if source.len() == 1 || source.len() == 4 {
+                    return Ok(None);
+                }
+                let label = true;
+                let name = Some(source[0].strip_suffix(":").unwrap().to_string());
+                let word = Some(source[2].to_string());
+                return Ok(Some(Self { name, label, word, ..Default::default() }));
+            }
+            // Check for Data Symbols with byte
+            if source[0].contains(".byte") {
+                let byte: Vec<u16> = match source.len() {
+                    1 => vec![parse_u16(source[1]).unwrap()],
+                    2.. => source[1..]
+                        .iter()
+                        .map(|x| {
+                            if x.contains(",") {
+                                parse_u16(x.strip_suffix(",").unwrap()).unwrap()
+                            } else {
+                                parse_u16(x).unwrap()
+                            }
+                        })
+                        .collect(),
+                    0 => unreachable!(),
+                };
+
+                let byte_string = String::from_utf16(byte.clone().as_slice()).unwrap();
+                Ok(Some(Self {
+                    byte: Some(byte),
+                    byte_as_str: Some(byte_string),
+                    ..Default::default()
+                }))
+            } else if source[0].contains(".word") {
+                let word: Option<String> = Some(source[1].into());
+                Ok(Some(Self { word, ..Default::default() }))
+            } else if source[0].starts_with("b")
+                && !source[1].starts_with(".L_")
+                && (!source[0].starts_with("bx") && source.len() == 1)
+            {
+                let label = true;
+                let word = match source[1] {
+                    "r0" | "r1" | "r2" | "r3" | "r4" | "r5" | "r6" | "r7" | "r8" | "lr" | "ip"
+                    | "pc" => None,
+                    x => Some(x.to_string()),
+                };
+                println!("{word:#?}");
+                return Ok(Some(Self { label, word, ..Default::default() }));
+            } else {
+                if let Some(name) = source[0].strip_suffix(":") {
+                    return Ok(Some(Self { name: Some(name.to_string()), ..Default::default() }));
+                } else {
+                    return Ok(None);
+                }
+            }
+        }
+
+        pub(super) fn byte_as_str(&self) -> String {
+            if let Some(byte_as_str) = &self.byte_as_str {
+                byte_as_str.to_string()
+            } else {
+                String::new()
+            }
+        }
+
+        pub(super) fn byte(&self) -> Vec<u16> {
+            if let Some(byte) = &self.byte { byte.to_owned() } else { Vec::new() }
+        }
+
+        pub(super) fn word_as_graph_node_word(&self) -> Option<GraphNodeWord> {
+            if let Some(word) = &self.word {
+                Some(word.to_string().into())
+            } else {
+                None
+            }
+        }
+    }
+
+    impl Display for AsmEntry {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut output = String::new();
+
+            if let Some(name) = &self.name {
+                output.push_str(format!("{}\tLabel:{}\n", name, self.label).as_str());
+            } else {
+                output.push_str(format!("N/A\tLabel: {}\n", self.label).as_str());
+            }
+            if let Some(byte) = &self.byte {
+                output.push_str(format!("Data:\t\t{:x?}\n", byte).as_str());
+            }
+            if let Some(byte) = &self.byte_as_str {
+                output.push_str(format!("AsString:\t\t{}\n", byte).as_str());
+            }
+
+            output.fmt(f)
+        }
+    }
+
+    /// Simple Vector Collection for [AsmEntry]
+    #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+    pub struct AsmEntries(Vec<AsmEntry>);
+
+    impl AsmEntries {
+        fn add(&mut self, x: AsmEntry) {
+            self.0.push(x)
+        }
+
+        pub(super) fn to_nodes(self) -> GraphNodes {
+            let mut entries = GraphNodes::default();
+
+            let mut node = GraphNode {
+                name: Rc::new(GraphNodeWord::from("GRAPH_DUMMY_START".to_string())),
+                ..Default::default()
+            };
+
+            for entry in self.into_iter() {
+                node = match entry.name.is_some() {
+                    true => {
+                        node.clean();
+                        entries.push(node);
+                        GraphNode::from_entry(entry)
+                    }
+                    false => node.consume_entry(entry),
+                }
+            }
+
+            entries.push(node);
+
+            entries
+        }
+    }
+
+    impl IntoIterator for AsmEntries {
+        type IntoIter = IntoIter<Self::Item>;
+        type Item = AsmEntry;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.0.into_iter()
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub(super) struct AsmParser;
+
+    /// Parses a ASM File line-by-line to [AsmEntry], creating the collection [AsmEntries]
+    impl AsmParser {
+        pub(super) fn parse<P: AsRef<Path>>(
+            file: P,
+            _options: &AsmParserOptions,
+        ) -> Result<AsmEntries, Whatever> {
+            let file = file.as_ref();
+            let buffer = read_to_string(file).unwrap();
+            let lines = buffer.lines();
+
+            // filter everything except definitions, words and bytes
+            let lines: Vec<_> = lines
+                .filter(|line| {
+                    line.contains(":")
+                        | line.contains(".word")
+                        | line.contains(".byte")
+                        | line.contains(".space")
+                        | line.trim_start().starts_with("b")
+                })
+                .collect();
+
+            let mut defs = AsmEntries::default();
+            for def_line in lines {
+                if let Some(def) = AsmEntry::from_str(def_line).unwrap() {
+                    defs.add(def);
+                }
+            }
+
+            Ok(defs)
+        }
     }
 }
