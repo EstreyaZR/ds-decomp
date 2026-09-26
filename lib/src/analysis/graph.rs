@@ -41,7 +41,7 @@ struct Tree {
 }
 
 impl Display for Tree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         todo!()
     }
 }
@@ -84,7 +84,7 @@ pub struct Graph {
 }
 
 impl Display for Graph {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         todo!()
     }
 }
@@ -472,7 +472,7 @@ impl Graph {
     pub fn init_edges(&mut self) {
         let lookup_nodes = self.nodes.clone();
         for node in lookup_nodes.values() {
-            if node.word.len() == 0 {
+            if node.word.is_empty() {
                 continue;
             } else {
                 let calls = node.word.clone();
@@ -523,7 +523,7 @@ impl Graph {
                 }
             }
         }
-        if self.options.debug == true {
+        if self.options.debug {
             log::info!("Statistics: {:?}", statistics);
         }
     }
@@ -544,31 +544,31 @@ impl Graph {
                     }
                 })
                 .collect();
-            if !status_vec.is_empty() {
-                if let Some(tree_node) = self.pop_node(node.clone()) {
-                    let mut tree_node = tree_node.clone();
+            if !status_vec.is_empty()
+                && let Some(tree_node) = self.pop_node(node.clone())
+            {
+                let mut tree_node = tree_node.clone();
 
-                    tree_node.tree_type = GraphNodeTreeType::TreeInit;
-                    let mut tree = Tree::new_from_node(tree_node.clone());
+                tree_node.tree_type = GraphNodeTreeType::TreeInit;
+                let mut tree = Tree::new_from_node(tree_node.clone());
 
-                    tree_node.word.clear();
-                    self.add_node(tree_node);
+                tree_node.word.clear();
+                self.add_node(tree_node);
 
-                    for leaf in vector {
-                        if let Some(leaf) = self.pop_node(leaf.clone()) {
-                            if leaf.tree_type == GraphNodeTreeType::TreeSimple {
-                                if let Some(popped_tree) = self.trees.remove(&leaf.name) {
-                                    tree.consume_tree(popped_tree);
-                                    self.remove_related_edges(&leaf.name);
-                                }
-                            } else {
-                                tree.add_node(leaf.clone());
+                for leaf in vector {
+                    if let Some(leaf) = self.pop_node(leaf.clone()) {
+                        if leaf.tree_type == GraphNodeTreeType::TreeSimple {
+                            if let Some(popped_tree) = self.trees.remove(&leaf.name) {
+                                tree.consume_tree(popped_tree);
                                 self.remove_related_edges(&leaf.name);
                             }
+                        } else {
+                            tree.add_node(leaf.clone());
+                            self.remove_related_edges(&leaf.name);
                         }
                     }
-                    self.trees.insert(tree.root.name.clone(), tree);
                 }
+                self.trees.insert(tree.root.name.clone(), tree);
             }
         }
         let nodes_in_graph_new = self.nodes.len();
