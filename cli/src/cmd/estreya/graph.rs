@@ -24,10 +24,22 @@ impl EstreyaComGraphArgs {
         let _config_path = self.config_path.parent().unwrap();
         if let Ok(files) = Self::dir_crawler(&self.asm_dir) {
             //log::info!("{:#?}", nodes);
-            let mut graph = Graph::from_files(GraphOptions::default(), files);
-            graph.tags();
-            // graph.called_by_debug();
-            //graph.print();
+            let mut graph = Graph::from_files(GraphOptions { debug: false }, files);
+            graph.apply_tags();
+            log::info!("Finished ApplyTags");
+            graph.init_edges();
+            log::info!("Finished InitEdges");
+            graph.init_called_by();
+            log::info!("Finished InitCalledBy");
+
+            let mut counter = 10;
+            while counter > 0 {
+                graph.init_tree_status();
+                // log::info!("Finished InitTreeStatus");
+                // log::info!("Finished InitTreeStatus");
+                graph.find_trees();
+                counter -= 1;
+            }
         }
         Ok(())
     }

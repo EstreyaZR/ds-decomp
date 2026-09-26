@@ -1,35 +1,98 @@
+#![allow(dead_code)]
+
 use std::{collections::BTreeMap, fmt::Display, path::Path, rc::Rc, str::FromStr, vec::IntoIter};
 
 type WordVec = Vec<Rc<GraphNodeWord>>;
-type TreeTable = BTreeMap<Rc<GraphNodeWord>, Vec<GraphNode>>;
+type Trees = BTreeMap<Rc<GraphNodeWord>, Tree>;
 type Nodes = BTreeMap<Rc<GraphNodeWord>, GraphNode>;
-type Edge = BTreeMap<Rc<GraphNodeWord>, WordVec>;
+type Edges = BTreeMap<Rc<GraphNodeWord>, WordVec>;
 
-trait GraphTrait {
-    fn edges_out(&self, node: Rc<GraphNodeWord>) -> WordVec;
-    fn edges_in(&self, node: Rc<GraphNodeWord>) -> WordVec;
-    fn add_edge(&mut self, from: Rc<GraphNodeWord>, to: Rc<GraphNodeWord>);
-    fn add_edge_from_vec(&mut self, vec: Vec<(Rc<GraphNodeWord>, Rc<GraphNodeWord>)>);
-    fn remove_edge(&mut self, from: Rc<GraphNodeWord>, to: Rc<GraphNodeWord>);
-    fn add_node(&mut self, node: GraphNode);
-    fn remove_node(&mut self, node: GraphNodeWord);
-    fn is_tree(&self, node: Rc<GraphNodeWord>) -> bool;
+trait GraphTrait: Eq + Display {
+    type Edge;
+    type Item;
+    type Indexer;
+
+    fn edges_out(&self, node: &Self::Indexer) -> Self::Edge;
+    fn edges_in(&self, node: &Self::Indexer) -> Self::Edge;
+
+    fn add_edge(&mut self, from: &Self::Indexer, to: &Self::Indexer);
+    fn remove_edge(&mut self, from: &Self::Indexer, to: &Self::Indexer);
+    fn remove_related_edges(&mut self, node: &Self::Indexer);
+
+    fn add_node(&mut self, node: Self::Item);
+    fn pop_node(&mut self, node: Self::Indexer) -> Option<Self::Item>;
+}
+
+trait TreeTrait: Eq + Display {
+    // fn new(name: Rc<GraphNodeWord>) -> Self;
+    fn new_from_node(node: GraphNode) -> Self;
+    fn get_root(&self) -> Rc<GraphNodeWord>;
+    // fn set_root(&mut self, node: Rc<GraphNodeWord>) -> Rc<GraphNodeWord>;
+    fn add_node(&mut self, node: GraphNode) -> Rc<GraphNodeWord>;
+    fn consume_tree(&mut self, tree: Self);
+    // fn consume_node(&mut self, node: GraphNode) -> Rc<GraphNodeWord>;
+    // fn pop_node(&mut self, node: Rc<GraphNodeWord>) -> Option<GraphNode>;
+}
+#[derive(Default, Debug, Eq, PartialEq, PartialOrd, Ord, Clone)]
+struct Tree {
+    root: GraphNode,
+    nodes: Nodes,
+    // edges: Edges,
+}
+
+impl Display for Tree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+impl TreeTrait for Tree {
+    fn new_from_node(node: GraphNode) -> Self {
+        Self { root: node.clone(), ..Default::default() }
+    }
+
+    fn add_node(&mut self, node: GraphNode) -> Rc<GraphNodeWord> {
+        let name = node.name.clone();
+        self.nodes.insert(name.clone(), node);
+        name
+    }
+
+    fn get_root(&self) -> Rc<GraphNodeWord> {
+        todo!()
+    }
+
+    fn consume_tree(&mut self, tree: Self) {
+        self.add_node(tree.root);
+        for (name, node) in tree.nodes {
+            self.nodes.insert(name.clone(), node.clone());
+        }
+    }
 }
 
 use snafu::Whatever;
 use strum::EnumString;
 
 use crate::util::{io::read_to_string, parse::parse_u16};
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Graph {
     options: GraphOptions,
     nodes: Nodes,
-    edges: Edge,
+    edges_up: Edges,
+    edges_down: Edges,
     grouped_nodes: Nodes,
-    trees: TreeTable,
+    trees: Trees,
 }
+
+impl Display for Graph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
-pub struct GraphOptions {}
+pub struct GraphOptions {
+    pub debug: bool,
+}
 
 #[derive(EnumString, Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
 #[strum(ascii_case_insensitive)]
@@ -98,24 +161,8 @@ impl From<String> for GraphNodeWord {
         }
     }
 }
-/*
-impl GraphNodeWord {
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Address(_) => false,
-            Self::Symbol(x) => x.is_empty(),
-        }
-    }
-}*/
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Default)]
 struct GraphNodeTags(Vec<GraphNodeTag>);
-
-impl GraphNodeTags {
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
 
 impl IntoIterator for GraphNodeTags {
     type IntoIter = IntoIter<Self::Item>;
@@ -147,6 +194,10 @@ enum GraphNodeTreeType {
     Root,
     NodeSimple,
     NodeMult,
+    TreeRoot,
+    TreeInit,
+    TreeSimple,
+    TreeMult,
 }
 
 impl GraphNodes {
@@ -161,7 +212,8 @@ pub struct GraphNode {
     tag: GraphNodeTags,
     byte: Vec<u16>,
     byte_as_str: Vec<String>,
-    word: Vec<Rc<GraphNodeWord>>,
+    word: WordVec,
+    called_by: WordVec,
     tree_type: GraphNodeTreeType,
 }
 
@@ -203,19 +255,6 @@ impl GraphNode {
         }
 
         Self { name, byte, byte_as_str, word, ..Default::default() }
-    }
-
-    fn consume_label_node(self, label: Self) -> Self {
-        let mut word = self.word.clone();
-        word.extend(label.word.clone());
-
-        Self {
-            name: self.name.clone(),
-            byte: self.byte.clone(),
-            byte_as_str: self.byte_as_str.clone(),
-            word,
-            ..Default::default()
-        }
     }
 
     /// Sorts Words, and cleans up Empty Strings / Words
@@ -277,12 +316,127 @@ impl GraphNode {
     fn add_tag(&mut self, tag: GraphNodeTag) {
         self.tag.0.push(tag);
     }
+
+    fn has_tree_type(&self, tree_type: GraphNodeTreeType) -> bool {
+        self.tree_type == tree_type
+    }
 }
 
 impl GraphTrait for Graph {
-    fn edges_in(&self, node: Rc<GraphNodeWord>) -> WordVec {
-        if let Some(found_node) = self.nodes.get(&node) {
-            self.edges
+    type Edge = Edges;
+    type Indexer = Rc<GraphNodeWord>;
+    type Item = GraphNode;
+
+    // For called_by relations
+    fn edges_in(&self, node: &Self::Indexer) -> Self::Edge {
+        let mut ret = BTreeMap::new();
+
+        if let Some(found_node) = self.edges_up.get(node) {
+            ret.insert(node.clone(), found_node.clone());
+        } else {
+            ret.insert(node.clone(), vec![]);
+        }
+        ret
+    }
+
+    // For word relations
+    fn edges_out(&self, node: &Self::Indexer) -> Self::Edge {
+        let mut ret = BTreeMap::new();
+
+        if let Some(found_node) = self.edges_down.get(node) {
+            ret.insert(node.clone(), found_node.clone());
+        } else {
+            ret.insert(node.clone(), vec![]);
+        }
+        ret
+    }
+
+    fn add_edge(&mut self, from: &Self::Indexer, to: &Self::Indexer) {
+        if let Some(edge) = self.edges_down.get(from) {
+            let mut edge = edge.clone();
+            edge.push(to.clone());
+            self.edges_down.insert(from.clone(), edge);
+        } else {
+            self.edges_down.insert(from.clone(), vec![to.clone()]);
+        }
+        if let Some(edge) = self.edges_up.get(to) {
+            let mut edge = edge.clone();
+            edge.push(to.clone());
+            self.edges_up.insert(to.clone(), edge);
+        } else {
+            self.edges_up.insert(to.clone(), vec![from.clone()]);
+        }
+    }
+
+    fn remove_related_edges(&mut self, node: &Self::Indexer) {
+        self.edges_up.remove(node);
+        self.edges_down.remove(node);
+    }
+
+    fn remove_edge(&mut self, from: &Self::Indexer, to: &Self::Indexer) {
+        if let Some(found_edge) = self.edges_down.get(from) {
+            let found_edge: WordVec =
+                found_edge.iter().filter(|x| !(**x == to.clone())).cloned().collect();
+            self.edges_down.insert(from.clone(), found_edge.clone());
+        }
+        if let Some(found_edge) = self.edges_up.get(to) {
+            let found_edge: WordVec =
+                found_edge.iter().filter(|x| !(**x == from.clone())).cloned().collect();
+            self.edges_up.insert(to.clone(), found_edge.clone());
+        }
+    }
+
+    fn add_node(&mut self, node: Self::Item) {
+        self.nodes.insert(node.name.clone(), node);
+    }
+
+    fn pop_node(&mut self, node: Self::Indexer) -> Option<Self::Item> {
+        self.nodes.remove(&node)
+    }
+}
+
+impl Graph {
+    fn nodes_by_tree_type(&self, tree_type: GraphNodeTreeType) -> WordVec {
+        self.nodes.values().filter(|x| x.tree_type == tree_type).map(|x| x.name.clone()).collect()
+    }
+
+    fn edges_out_by_tree_type(&self, tree_type: GraphNodeTreeType) -> Edges {
+        let mut ret = BTreeMap::new();
+
+        let found = self.nodes_by_tree_type(tree_type);
+
+        for i in found {
+            if let Some(found_node) = self.edges_down.get(&i) {
+                ret.insert(i.clone(), found_node.clone());
+            } else {
+                ret.insert(i.clone(), vec![]);
+            }
+        }
+        ret
+    }
+
+    fn edges_in_by_tree_type(&self, tree_type: GraphNodeTreeType) -> Edges {
+        let mut ret: Edges = BTreeMap::new();
+
+        let found = self.nodes_by_tree_type(tree_type);
+
+        for i in found {
+            if let Some(found_node) = self.edges_up.get(&i) {
+                ret.insert(i.clone(), found_node.clone());
+            } else {
+                ret.insert(i.clone(), vec![]);
+            }
+        }
+        ret
+    }
+
+    fn lookup_edges_in(
+        lookup_nodes: &Nodes,
+        lookup_edges: &Edges,
+        node: &Rc<GraphNodeWord>,
+    ) -> WordVec {
+        if let Some(found_node) = lookup_nodes.get(node) {
+            lookup_edges
                 .iter()
                 .filter(|(_x, y)| y.contains(&found_node.name))
                 .map(|(x, _y)| x.clone())
@@ -292,62 +446,142 @@ impl GraphTrait for Graph {
         }
     }
 
-    fn edges_out(&self, node: Rc<GraphNodeWord>) -> WordVec {
-        if let Some(found_node) = self.edges.get(&node) {
+    fn lookup_edges_out(lookup_edges: &Edges, node: Rc<GraphNodeWord>) -> WordVec {
+        if let Some(found_node) = lookup_edges.get(&node) {
             found_node.clone()
         } else {
             vec![]
         }
     }
 
-    fn add_edge(&mut self, from: Rc<GraphNodeWord>, to: Rc<GraphNodeWord>) {
-        if let Some(edge) = self.edges.get(&from) {
-            let mut edge = edge.clone();
-            edge.push(to);
-            self.edges.insert(from, edge);
-        } else {
-            self.edges.insert(from, vec![to]);
-        }
-    }
-
-    fn add_edge_from_vec(&mut self, vec: Vec<(Rc<GraphNodeWord>, Rc<GraphNodeWord>)>) {
-        for i in vec {
-            self.add_edge(i.0, i.1);
-        }
-    }
-
-    fn remove_edge(&mut self, from: Rc<GraphNodeWord>, to: Rc<GraphNodeWord>) {
-        if let Some(found_edge) = self.edges.get(&from) {
-            let found_edge =
-                found_edge.iter().filter(|x| !(**x == to)).cloned().collect();
-            self.edges.insert(from, found_edge);
-        }
-    }
-
-    fn add_node(&mut self, node: GraphNode) {
-        self.nodes.insert(node.name.clone(), node);
-    }
-
-    fn remove_node(&mut self, node: GraphNodeWord) {
-        if self.nodes.get(&node).is_some() {
-            self.nodes.remove(&node);
-        }
-    }
-
-    fn is_tree(&self, _node: Rc<GraphNodeWord>) -> bool {
-        todo!();
-    }
-}
-
-impl Graph {
-    pub fn tags(&mut self) {
+    pub fn apply_tags(&mut self) {
         for node in self.nodes.values_mut() {
             node.apply_tags();
         }
     }
 
+    pub fn init_called_by(&mut self) {
+        let lookup_edges = self.edges_up.clone();
+        for node in self.nodes.values_mut() {
+            if let Some(found_callers) = lookup_edges.get(&node.name) {
+                node.called_by = found_callers.clone();
+            }
+        }
+    }
+
+    pub fn init_edges(&mut self) {
+        let lookup_nodes = self.nodes.clone();
+        for node in lookup_nodes.values() {
+            if node.word.len() == 0 {
+                continue;
+            } else {
+                let calls = node.word.clone();
+                for called in calls {
+                    self.add_edge(&node.name.clone(), &called.clone());
+                }
+            }
+        }
+    }
+
+    pub fn init_tree_status(&mut self) {
+        let mut statistics = (0, 0, 0, 0, 0, 0);
+        for node in self.nodes.values_mut() {
+            if node.tree_type == GraphNodeTreeType::TreeMult
+                || node.tree_type == GraphNodeTreeType::TreeInit
+            {
+                node.tree_type = match node.called_by.len() {
+                    0 => GraphNodeTreeType::TreeRoot,
+                    1 => GraphNodeTreeType::TreeSimple,
+                    2.. => GraphNodeTreeType::TreeMult,
+                }
+            } else {
+                node.tree_type = match (node.called_by.len(), node.word.len()) {
+                    (0, 0) => {
+                        statistics.0 += 1;
+                        GraphNodeTreeType::Orphan
+                    }
+                    (1, 0) => {
+                        statistics.1 += 1;
+                        GraphNodeTreeType::LeafSimple
+                    }
+                    (2.., 0) => {
+                        statistics.2 += 1;
+                        GraphNodeTreeType::LeafMult
+                    }
+                    (0, 1..) => {
+                        statistics.3 += 1;
+                        GraphNodeTreeType::Root
+                    }
+                    (1, 1..) => {
+                        statistics.4 += 1;
+                        GraphNodeTreeType::NodeSimple
+                    }
+                    (2.., 1..) => {
+                        statistics.5 += 1;
+                        GraphNodeTreeType::NodeMult
+                    }
+                }
+            }
+        }
+        if self.options.debug == true {
+            log::info!("Statistics: {:?}", statistics);
+        }
+    }
+
+    pub fn find_trees(&mut self) {
+        let nodes_in_graph = self.nodes.len();
+        let edges = self.edges_down.clone();
+
+        for (node, vector) in edges.iter() {
+            let status_vec: Vec<_> = vector
+                .iter()
+                .filter(|x| {
+                    if let Some(real_node) = self.nodes.get(x.clone()) {
+                        real_node.has_tree_type(GraphNodeTreeType::LeafSimple)
+                            || real_node.has_tree_type(GraphNodeTreeType::TreeSimple)
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            if !status_vec.is_empty() {
+                if let Some(tree_node) = self.pop_node(node.clone()) {
+                    let mut tree_node = tree_node.clone();
+
+                    tree_node.tree_type = GraphNodeTreeType::TreeInit;
+                    let mut tree = Tree::new_from_node(tree_node.clone());
+
+                    tree_node.word.clear();
+                    self.add_node(tree_node);
+
+                    for leaf in vector {
+                        if let Some(leaf) = self.pop_node(leaf.clone()) {
+                            if leaf.tree_type == GraphNodeTreeType::TreeSimple {
+                                if let Some(popped_tree) = self.trees.remove(&leaf.name) {
+                                    tree.consume_tree(popped_tree);
+                                    self.remove_related_edges(&leaf.name);
+                                }
+                            } else {
+                                tree.add_node(leaf.clone());
+                                self.remove_related_edges(&leaf.name);
+                            }
+                        }
+                    }
+                    self.trees.insert(tree.root.name.clone(), tree);
+                }
+            }
+        }
+        let nodes_in_graph_new = self.nodes.len();
+        log::info!(
+            "{} Nodes remain from {} scanned in Source Assembly\nGraph has {} Trees",
+            nodes_in_graph_new,
+            nodes_in_graph,
+            self.trees.len()
+        );
+    }
+
     pub fn from_files<P: AsRef<Path>>(options: GraphOptions, files: Vec<P>) -> Self {
-        let mut nodes: Nodes = BTreeMap::default();
+        let mut nodes: Nodes = BTreeMap::new();
 
         for i in files {
             let mut entries_vec = GraphNodes::default();
