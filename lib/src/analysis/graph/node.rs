@@ -116,8 +116,11 @@ impl GraphNode {
             .byte_as_str
             .iter()
             .filter(|x| !x.is_empty())
-            .map(|x| x.to_string())
+            .map(|x| x.trim_matches([b' ' as char, '\0']).to_string())
             .collect::<Vec<String>>();
+
+        self.word.sort_unstable();
+        self.word.dedup();
     }
 
     /// Takes care of actually tagging [GraphNode],
@@ -159,9 +162,7 @@ impl GraphNode {
 
     pub fn is_file(&self) -> Option<GraphFileType> {
         let s = self.byte_as_str.join("");
-        if let Some(s) =
-            s.trim_end_matches([b' ' as char, '\0']).to_lowercase().split('.').next_back()
-        {
+        if let Some(s) = s.to_lowercase().split('.').next_back() {
             return GraphFileType::from_str(s).ok();
         }
         None
@@ -175,12 +176,25 @@ impl GraphNode {
         self.tree_type == tree_type
     }
 
+    pub fn remove_from_word(&mut self, word: &Rc<GraphNodeWord>) {
+        self.word = self.word.iter().filter(|x| !x.eq(&word)).cloned().collect();
+    }
+
+    pub fn remove_from_called_by(&mut self, word: &Rc<GraphNodeWord>) {
+        self.called_by = self.called_by.iter().filter(|x| !x.eq(&word)).cloned().collect();
+    }
+
     pub fn init_in_loop_with(&mut self) {
         self.call_loop = self.word.iter().filter(|x| self.called_by.contains(x)).cloned().collect();
+    }
 
-        self.word = self.word.iter().filter(|x| !self.call_loop.contains(x)).cloned().collect();
+    pub fn remove_loop_with_symbols_in_called_by(&mut self) {
         self.called_by =
-            self.word.iter().filter(|x| !self.call_loop.contains(x)).cloned().collect();
+            self.called_by.iter().filter(|x| !self.call_loop.contains(x)).cloned().collect();
+    }
+
+    pub fn remove_loop_with_symbols_in_word(&mut self) {
+        self.word = self.word.iter().filter(|x| !self.call_loop.contains(x)).cloned().collect();
     }
 
     pub fn is_tree(&self) -> bool {
@@ -206,9 +220,7 @@ impl GraphNode {
 
     pub fn print_file(&self) -> String {
         let mut s = String::new();
-        s.push_str(
-            format!("[{}]\t{}\n", self.name, self.tree_type).as_str(),
-        );
+        s.push_str(format!("[{}]\t{}\n", self.name, self.tree_type).as_str());
         if !self.tag.is_empty() {
             s.push_str("\t[Tags]");
             for i in self.tag.clone().into_iter() {
@@ -225,13 +237,13 @@ impl GraphNode {
                 s.push('\n');
                 s.push('\t');
                 for j in 0..7 {
-                    s.push_str(format!("{}\t", self.byte[i * 8 + j]).as_str());
+                    s.push_str(format!("{:x} ", self.byte[i * 8 + j]).as_str());
                 }
             }
             s.push('\n');
             s.push('\t');
             for k in 0..remainder {
-                s.push_str(format!("{}", self.byte[full_rows * 8 + k]).as_str());
+                s.push_str(format!("{:x}", self.byte[full_rows * 8 + k]).as_str());
             }
             s.push('\n');
             s.push_str("\tString:");
@@ -253,7 +265,7 @@ impl GraphNode {
         if !self.called_by.is_empty() {
             s.push('\n');
             s.push_str("\t[CalledBy]");
-            for i in self.word.iter() {
+            for i in self.called_by.iter() {
                 s.push('\n');
                 s.push('\t');
                 s.push_str(&i.to_string());
@@ -264,7 +276,7 @@ impl GraphNode {
         if !self.call_loop.is_empty() {
             s.push('\n');
             s.push_str("\t[CallLoop]");
-            for i in self.word.iter() {
+            for i in self.call_loop.iter() {
                 s.push('\n');
                 s.push('\t');
                 s.push_str(&i.to_string());

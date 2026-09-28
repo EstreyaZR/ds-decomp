@@ -86,20 +86,20 @@ impl GraphTrait for Graph {
         ret
     }
 
-    fn add_edge(&mut self, from: &Self::Indexer, to: &Self::Indexer) {
-        if let Some(edge) = self.edges_down.get(from) {
-            let mut edge = edge.clone();
-            edge.push(to.clone());
-            self.edges_down.insert(from.clone(), edge);
+    fn add_edge(&mut self, caller: &Self::Indexer, callee: &Self::Indexer) {
+        if let Some(found_callee) = self.edges_down.get(caller) {
+            let mut found_callee = found_callee.clone();
+            found_callee.push(callee.clone());
+            self.edges_down.insert(caller.clone(), found_callee);
         } else {
-            self.edges_down.insert(from.clone(), vec![to.clone()]);
+            self.edges_down.insert(caller.clone(), vec![callee.clone()]);
         }
-        if let Some(edge) = self.edges_up.get(to) {
-            let mut edge = edge.clone();
-            edge.push(to.clone());
-            self.edges_up.insert(to.clone(), edge);
+        if let Some(found_callers) = self.edges_up.get(callee) {
+            let mut found_callers = found_callers.clone();
+            found_callers.push(caller.clone());
+            self.edges_up.insert(callee.clone(), found_callers);
         } else {
-            self.edges_up.insert(to.clone(), vec![from.clone()]);
+            self.edges_up.insert(callee.clone(), vec![caller.clone()]);
         }
     }
 
@@ -132,6 +132,9 @@ impl GraphTrait for Graph {
 
 impl Graph {
     pub fn init_nodes(&mut self) {
+        self.clean_byte_strings();
+        log::info!("Finished CleanByteStrings");
+
         self.init_edges();
         log::info!("Finished InitEdges");
 
@@ -141,14 +144,17 @@ impl Graph {
         self.init_loops();
         log::info!("Finished InitLoops");
 
-        self.clean_byte_strings();
-        log::info!("Finished CleanByteStrings");
+        self.resolve_loops();
 
         self.apply_tags();
         log::info!("Finished ApplyTags");
 
         self.init_tree_status();
         log::info!("Finished InitTreeStatus");
+    }
+
+    fn resolve_loops(&mut self) {
+        self.nodes.values_mut().for_each(|x| x.remove_loop_with_symbols_in_word());
     }
 
     fn apply_tags(&mut self) {
@@ -189,9 +195,9 @@ impl Graph {
             if node.word.is_empty() {
                 continue;
             } else {
-                let calls = node.word.clone();
-                for called in calls {
-                    self.add_edge(&node.name.clone(), &called.clone());
+                let callees = node.word.clone();
+                for callee in callees {
+                    self.add_edge(&node.name.clone(), &callee.clone());
                 }
             }
         }
@@ -222,42 +228,47 @@ impl Graph {
                 .iter()
                 .filter(|x| {
                     if let Some(real_node) = self.nodes.get(x.to_owned()) {
-                        !real_node.has_tree_type(GraphNodeTreeType::LeafSimple)
-                            || !real_node.has_tree_type(GraphNodeTreeType::TreeSimple)
+                        real_node.has_tree_type(GraphNodeTreeType::LeafSimple)
+                            || real_node.has_tree_type(GraphNodeTreeType::TreeSimple)
                     } else {
                         false
                     }
                 })
                 .collect();
             if !simple_nodes.is_empty()
-                && let Some(tree_node) = self.pop_node(node.clone())
+                && let Some(tree_node) = self.pop_node(node.to_owned())
             {
                 let mut tree_node = tree_node.clone();
-
-                tree_node.tree_type = GraphNodeTreeType::TreeInit;
                 let mut tree = Tree::new_from_node(tree_node.clone());
+
                 tree.level = iteration;
 
-                tree_node.word.clear();
-                tree_node.update_tree_type();
-                self.add_node(tree_node);
-
-                for leaf in vector {
-                    if let Some(found_leaf) = self.pop_node(leaf.clone()) {
-                        if found_leaf.tree_type == GraphNodeTreeType::TreeSimple {
-                            if let Some(popped_tree) = self.trees.remove(&found_leaf.name) {
-                                tree.consume_tree(popped_tree);
-                                self.remove_related_edges(&found_leaf.name);
+                for child in vector {
+                    if let Some(found_child) = self.pop_node(child.to_owned()) {
+                        match found_child.tree_type {
+                            GraphNodeTreeType::TreeSimple => {
+                                if let Some(popped_tree) = self.trees.remove(&found_child.name) {
+                                    tree.consume_tree(popped_tree);
+                                }
+                                tree_node.remove_from_word(&found_child.name);
                             }
-                        } else {
-                            tree.add_node(found_leaf.clone());
-                            self.remove_related_edges(&found_leaf.name);
+                            GraphNodeTreeType::LeafSimple => {
+                                tree.add_node(found_child.clone());
+                                tree_node.remove_from_word(&found_child.name);
+                            }
+                            _ => {
+                                self.add_node(found_child);
+                            }
                         }
                     }
                 }
-                self.trees.insert(tree.root.name.clone(), tree);
+
+                tree_node.tree_type = GraphNodeTreeType::TreeInit;
+                self.add_node(tree_node);
+                self.trees.insert(tree.get_root(), tree);
             }
         }
+
         let nodes_in_graph_new = self.nodes.len();
 
         if self.options.debug {
@@ -292,6 +303,7 @@ impl Graph {
         let dir = path.as_ref(); // Config Path
         let tree_dir = dir.join("tree");
 
+        // TreePrinting
         for (name, tree) in &self.trees {
             let level = format!("level_{}", tree.level);
             let name = name.to_string();
@@ -304,6 +316,7 @@ impl Graph {
 
             let _ = writer.write_fmt(format_args!("{}", tree.print_file()));
         }
+        // Remaining Nodes in Graph Printing
 
         Ok(())
     }
