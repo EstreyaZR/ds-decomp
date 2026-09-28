@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Args;
-use ds_decomp::{
-    analysis::graph::{Graph, GraphOptions},
-    config::config::Config,
-};
+use ds_decomp::analysis::graph::{Graph, GraphOptions};
 
 use crate::util::io::read_dir;
 #[derive(Args)]
@@ -16,29 +13,34 @@ pub struct EstreyaComGraphArgs {
     pub asm_dir: PathBuf,
     #[arg(long, short = 'd')]
     pub dry_run: bool,
+
+    /// Number of iterations to scan for trees
+    #[arg(long, short = 'n', default_value_t = 10)]
+    pub iterations: u8,
+
+    /// Print more Infos
+    #[arg(long)]
+    pub debug: bool,
 }
 
 impl EstreyaComGraphArgs {
     pub fn run(&self) -> Result<()> {
-        let _config = Config::from_file(&self.config_path)?;
-        let _config_path = self.config_path.parent().unwrap();
+        let config_path = self.config_path.parent().unwrap();
         if let Ok(files) = Self::dir_crawler(&self.asm_dir) {
             //log::info!("{:#?}", nodes);
-            let mut graph = Graph::from_files(GraphOptions { debug: false }, files);
-            graph.apply_tags();
-            log::info!("Finished ApplyTags");
-            graph.init_edges();
-            log::info!("Finished InitEdges");
-            graph.init_called_by();
-            log::info!("Finished InitCalledBy");
+            let mut graph = Graph::from_files(GraphOptions { debug: self.debug }, files);
+            graph.init_nodes();
 
-            let mut counter = 10;
-            while counter > 0 {
-                graph.init_tree_status();
-                // log::info!("Finished InitTreeStatus");
-                // log::info!("Finished InitTreeStatus");
-                graph.find_trees();
-                counter -= 1;
+            for i in 0..self.iterations {
+                graph.find_trees(i)
+            }
+
+            if self.dry_run {
+                log::info!("Dry Run Complete");
+                return Ok(());
+            } else {
+                graph.to_file(config_path).expect("Error writing the tree files");
+                log::info!("Wrote Files");
             }
         }
         Ok(())
