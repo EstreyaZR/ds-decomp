@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use ds_decomp_cli::cmd::{
-    Apply, CheckArgs, Delink, DiffArgs, Disassemble, DumpArgs, EstreyaArgs, FixArgs, Format,
+    Apply, CheckArgs, Delink, DiffArgs, Disassemble, DumpArgs, FixArgs, Format, GraphArgs,
     ImportArgs, Init, JsonArgs, Lcf, Objdiff, RomArgs, SigArgs,
 };
 use env_logger::WriteStyle;
@@ -34,6 +34,7 @@ enum Command {
     Dump(DumpArgs),
     Fix(FixArgs),
     Format(Format),
+    Graph(GraphArgs),
     Import(ImportArgs),
     Init(Init),
     Json(JsonArgs),
@@ -41,8 +42,6 @@ enum Command {
     Rom(RomArgs),
     Objdiff(Objdiff),
     Sig(SigArgs),
-
-    Estreya(EstreyaArgs),
 }
 
 impl Command {
@@ -63,7 +62,7 @@ impl Command {
             Command::Sig(sig) => sig.run(),
             Command::Format(format) => format.run(),
             Command::Diff(diff) => diff.run(),
-            Command::Estreya(estreya) => estreya.run(),
+            Command::Graph(graph) => graph.run(),
         }
     }
 

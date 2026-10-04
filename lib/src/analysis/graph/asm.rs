@@ -1,204 +1,349 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+#![allow(deprecated)]
+use std::ffi::OsString;
+
 use super::*;
+
+#[derive(Debug)]
+pub struct AsmFile {
+    pub name: OsString,
+    pub syntax_global: bool,
+    pub path: std::path::PathBuf,
+    pub symbols: BTreeMap<AsmWord, AsmSymbol>,
+    pub outgoing_symbols: Vec<AsmWord>,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub enum AsmWord {
+    Address(u32),
+    Symbol(String),
+}
+
+impl Display for AsmWord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::new();
+        match self {
+            Self::Address(num) => {
+                s.push_str(&format!("{:#x}", num));
+            }
+            Self::Symbol(x) => {
+                s.push_str(&x.to_string());
+            }
+        }
+        f.write_str(s.as_str())
+    }
+}
+
+impl Default for AsmWord {
+    fn default() -> Self {
+        Self::Symbol(String::default())
+    }
+}
+
+impl FromStr for AsmWord {
+    type Err = AsmWordFromStrErr;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(s.to_string().into())
+    }
+}
+
+impl From<String> for AsmWord {
+    fn from(value: String) -> Self {
+        match value.strip_prefix("0x") {
+            Some(x) => Self::Address(u32::from_str_radix(x, 16).unwrap()),
+            None => Self::Symbol(value),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub enum AsmSectionType {
+    Text,
+    Data,
+    Rodata,
+    Bss,
+    Custom(String),
+
+    Unknown,
+}
 
 #[derive(Debug, Default)]
 pub struct AsmParser;
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub enum AsmType {
+    Syntax,
+    Include,
+    Global,
+    Section(AsmSectionType),
 
-/// Simple Vector Collection for [AsmEntry]
-#[derive(Default, Debug, Clone)]
-pub struct AsmEntries(Vec<AsmEntry>);
+    ArmFunctionStart,
+    ArmFunctionEnd,
 
-/// Growable entry of at least one parsed line of Assembly.
-#[derive(Default, Clone, Debug)]
-pub struct AsmEntry {
-    pub name: Option<String>,
-    pub label: bool,
-    #[allow(dead_code)]
-    pub bss: bool,
-    pub byte: Option<Vec<u16>>,
-    pub byte_as_str: Option<String>,
-    pub word: Option<String>,
+    ThumbFunctionStart,
+    ThumbFunctionEnd,
+
+    Label,
+    Symbol,
+    Byte,
+    Word,
+
+    Jump,
+    CoProcessor,
+
+    #[default]
+    Unknown,
 }
 
-impl AsmEntry {
-    /// Doesn't actually assume to fail from input
-    pub fn from_str(source: &str) -> Result<Option<Self>, Whatever> {
-        let source: Vec<&str> = source.split_whitespace().collect();
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub enum AsmSymbolType {
+    ArmFunction,
+    ThumbFunction,
+    Data,
+    Bss(u32),
+    #[default]
+    Unknown,
+}
 
-        // LABELS
-        if source[0].starts_with(".L_") {
-            if source.len() == 1 || source.len() == 4 {
-                return Ok(None);
-            }
-            let label = true;
-            let name = None;
-            let word = Some(source[2].to_string());
-            Ok(Some(Self { name, label, word, ..Default::default() }))
-        } else if source[0].contains(".byte") {
-            let byte: Vec<u16> = match source.len() {
-                1 => vec![parse_u16(source[1]).unwrap()],
-                2.. => source[1..]
-                    .iter()
-                    .map(|x| {
-                        if x.contains(",") {
-                            parse_u16(x.strip_suffix(",").unwrap()).unwrap()
-                        } else {
-                            parse_u16(x).unwrap()
-                        }
-                    })
-                    .collect(),
-                0 => unreachable!(),
-            };
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct AsmLine {
+    asm_type: AsmType,
+    content: Vec<String>,
+}
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct AsmLines(Vec<AsmLine>);
 
-            let byte_string = String::from_utf16(byte.clone().as_slice()).unwrap();
-            Ok(Some(Self {
-                byte: Some(byte),
-                byte_as_str: Some(byte_string),
-                ..Default::default()
-            }))
-        } else if source[0].contains(".word") {
-            let word: Option<String> = Some(source[1].into());
-            Ok(Some(Self { word, ..Default::default() }))
-        } else if source[0].starts_with("b") && !source[1].starts_with(".L_") {
-            let label = true;
-            let word = match source[1] {
-                "r0" | "r1" | "r2" | "r3" | "r4" | "r5" | "r6" | "r7" | "r8" | "r9" | "r10"
-                | "r11" | "lr" | "ip" | "pc" => None,
-                "r0," | "r1," | "r2," | "r3," | "r4," | "r5," | "r6," | "r7," | "r8," | "r9,"
-                | "r10," | "r11," | "lr," | "ip," | "pc," => None,
-                x => Some(x.to_string()),
-            };
-            if word.is_none() {
-                return Ok(None);
-            }
-            // println!("{word:?}");
-            Ok(Some(Self { label, word, ..Default::default() }))
-        } else if source.len() == 3 && source[1].contains(".space") {
-            let name = Some(source[0].strip_suffix(":").unwrap().to_string());
-            Ok(Some(Self { name, ..Default::default() }))
-        } else {
-            if let Some(name) = source[0].strip_suffix(":") {
-                if name.contains(".L_") {
-                    panic!("Label Symbol Escaped");
+impl AsmLines {
+    pub fn collect_to_symbol(&mut self) -> AsmSymbol {
+        let mut global = false;
+        let mut name = AsmWord::default();
+        let mut asm_type = AsmSymbolType::default();
+        let mut outgoing: Vec<AsmWord> = Vec::new();
+        let mut content:
+
+        for line in self.0.drain(..) {
+            match line.asm_type {
+                AsmType::Symbol => {
+                    name = line.get_name_from_symbol();
+                    if let Some(size) = line.parse_space_from_symbol() {
+                        asm_type = AsmSymbolType::Bss(size);
+                    }
                 }
-                Ok(Some(Self { name: Some(name.to_string()), ..Default::default() }))
-            } else {
-                Ok(None)
+                AsmType::ArmFunctionStart => {
+                    asm_type = AsmSymbolType::ArmFunction;
+                }
+                AsmType::ThumbFunctionStart => {
+                    asm_type = AsmSymbolType::ArmFunction;
+                }
+                AsmType::ArmFunctionEnd | AsmType::ThumbFunctionEnd => {
+                    break;
+                }
+                AsmType::Global => {
+                    global = true;
+                }
+                AsmType::Label => {
+                    if let Some(word) = line.parse_word_from_label() {
+                        outgoing.push(word);
+                    }
+                }
+                AsmType::Byte => {
+
+                }
+
+                _ => {
+                    todo!()
+                }
             }
         }
+
+        AsmSymbol { global, name, asm_type, outgoing }
     }
 
-    /// Helper func to detect Files.
-    pub fn byte_as_str(&self) -> String {
-        if let Some(byte_as_str) = &self.byte_as_str {
-            byte_as_str.to_string()
-        } else {
-            String::new()
-        }
-    }
-
-    pub fn byte(&self) -> Vec<u16> {
-        if let Some(byte) = &self.byte { byte.to_owned() } else { Vec::new() }
-    }
-
-    pub fn word_as_graph_node_word(&self) -> Option<GraphNodeWord> {
-        self.word.as_ref().map(|word| word.to_string().into())
+    pub fn push(&mut self, line: &AsmLine) {
+        self.0.push(line.to_owned());
     }
 }
 
-impl AsmEntries {
-    fn add(&mut self, x: AsmEntry) {
-        self.0.push(x)
-    }
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct AsmSymbol {
+    name: AsmWord,
+    global: bool,
+    asm_type: AsmSymbolType,
+    outgoing: Vec<AsmWord>,
+}
 
-    pub fn to_nodes(&self) -> GraphNodes {
-        let mut nodes = GraphNodes::default();
+impl AsmLine {
+    pub fn parse(source: &str) -> Self {
+        let source = source.to_owned();
+        let source: Vec<_> = source.split_whitespace().collect();
+        let mut asm_type: AsmType = match source[0] {
+            s if s.starts_with(".byte") => AsmType::Byte,
+            s if s.starts_with(".word") => AsmType::Word,
+            //s if s.starts_with(".space") => AsmType::Space,
+            s if s.starts_with(".syntax") => AsmType::Syntax,
+            s if s.starts_with(".include") => AsmType::Include,
+            s if s.starts_with(".global") => AsmType::Global,
+            s if s.starts_with(".text") => AsmType::Section(AsmSectionType::Text),
+            s if s.starts_with(".section") => AsmType::Section(AsmSectionType::Unknown),
 
-        // log::info!("{:#?}", self);
+            s if s.starts_with("arm_func_start") => AsmType::ArmFunctionStart,
+            s if s.starts_with("arm_func_end") => AsmType::ArmFunctionEnd,
+            s if s.starts_with("thumb_func_start") => AsmType::ThumbFunctionStart,
+            s if s.starts_with("thumb_func_end") => AsmType::ThumbFunctionEnd,
 
-        let mut switch = false;
-        let mut node = GraphNode {
-            name: Rc::new(GraphNodeWord::from("GRAPH_DUMMY_START".to_string())),
-            ..Default::default()
+            s if !s.starts_with(".L_") && s.ends_with(":") => AsmType::Symbol,
+            s if s.starts_with(".L_") => AsmType::Label,
+
+            _ => AsmType::default(),
         };
 
-        for entry in self.clone() {
-            if entry.name.is_some() {
-                if switch {
-                    node.clean();
-                    nodes.push(node);
-                } else {
-                    switch = true;
-                }
-                node = GraphNode::from_entry(entry);
-                // log::info!("From Entry{:#?}", node);
-            } else {
-                // log::info!("Consumed: {:?} {:?}", node.name, entry);
-                node = node.consume_entry(entry);
+        if asm_type == AsmType::Section(AsmSectionType::Unknown) {
+            asm_type = match source[1] {
+                s if s.contains(".data") => AsmType::Section(AsmSectionType::Data),
+                s if s.contains(".rodata") => AsmType::Section(AsmSectionType::Rodata),
+                s if s.contains(".bss") => AsmType::Section(AsmSectionType::Bss),
+                s => AsmType::Section(AsmSectionType::Custom(s.to_string())),
             }
         }
 
-        nodes.push(node);
-        // log::info!("{:?}", nodes);
-        nodes
+        Self { asm_type, content: source.iter().map(|v| v.to_string()).collect() }
+    }
+
+    pub fn parse_word_from_label(&self) -> Option<AsmWord> {
+        if self.content.len() == 3 {
+            if self.content[1].contains(".word") {
+                let word = AsmWord::from(self.content[2].clone());
+                return Some(word);
+            }
+        }
+        None
+    }
+
+    pub fn parse_space_from_symbol(&self) -> Option<u32> {
+        if self.content.len() == 3 {
+            if self.content[1].contains(".space") {
+                let size = u32::from_str_radix(self.content[2].as_str(), 16).unwrap();
+                return Some(size);
+            }
+        }
+        None
+    }
+
+    pub fn get_name_from_symbol(&self) -> AsmWord {
+        let mut name = self.content[1].clone();
+        AsmWord::from(name.trim_end_matches(':').to_string())
     }
 }
 
-/// Parses a ASM File line-by-line to [AsmEntry], creating the collection [AsmEntries]
+// pub fn byte_as_str(&self) -> String {
+//     if let Some(byte_as_str) = &self.byte_as_str {
+//         byte_as_str.to_string()
+//     } else {
+//         String::new()
+//     }
+// }
+
 impl AsmParser {
-    pub fn parse<P: AsRef<Path>>(file: P) -> Result<AsmEntries, Whatever> {
+    pub fn parse<P: AsRef<Path>>(file: P) -> AsmFile {
         let file = file.as_ref();
         let buffer = read_to_string(file).unwrap();
         let lines = buffer.lines();
 
         // filter everything except definitions, words and bytes
-        let lines: Vec<_> = lines
-            .filter(|line| {
-                line.contains(":")
-                    || line.contains(".word")
-                    || line.contains(".byte")
-                    || line.contains(".space")
-                    || line.trim_start().starts_with("b")
-            })
-            .collect();
+        let lines: Vec<_> = lines.map(|line| AsmLine::parse(line.trim_start())).collect();
 
-        let mut defs = AsmEntries::default();
-        for def_line in lines {
-            // log::info!("Found Line:\t {:?}", def_line);
-            if let Some(def) = AsmEntry::from_str(def_line).unwrap() {
-                // log::info!("Which yielded:\t {:?}", def);
-                defs.add(def);
+        let mut symbols = BTreeMap::new();
+        let mut asm_lines: AsmLines = AsmLines::default();
+        let mut in_function_switch = false;
+        let mut section: AsmSectionType = AsmSectionType::Unknown;
+        let mut syntax_global = false;
+
+        for line in lines.iter() {
+            match line.asm_type {
+                // Headers
+                AsmType::Section(ref sec) => {
+                    section = sec.to_owned();
+                }
+                AsmType::Syntax => {
+                    syntax_global = true;
+                }
+
+                // Function-Related Section
+                AsmType::ArmFunctionStart | AsmType::ThumbFunctionStart | AsmType::Global => {
+                    if !asm_lines.0.is_empty() && in_function_switch == false {
+                        let symbol = asm_lines.collect_to_symbol();
+                        symbols.insert(symbol.name.clone(), symbol);
+                    }
+                    asm_lines.push(line);
+                    in_function_switch = true;
+                }
+
+                AsmType::Word | AsmType::Label => {
+                    asm_lines.push(line);
+                }
+
+                AsmType::Symbol => {
+                    if in_function_switch {
+                        asm_lines.push(line);
+                    } else {
+                        let symbol = asm_lines.collect_to_symbol();
+                        symbols.insert(symbol.name.clone(), symbol);
+                        asm_lines.push(line);
+                    }
+                }
+
+                AsmType::ArmFunctionEnd | AsmType::ThumbFunctionEnd => {
+                    if section == AsmSectionType::Text && in_function_switch {
+                        in_function_switch = false;
+                        asm_lines.push(line);
+                        let symbol = asm_lines.collect_to_symbol();
+                        symbols.insert(symbol.name.clone(), symbol);
+                    } else {
+                        panic!("ArmFunction Declaration found outside of Text Section");
+                    }
+                }
+                // Function Section End
+                // Data / Rodata Section
+
+                // Data / Rodata Section End
+                _ => continue,
             }
         }
 
-        Ok(defs)
+        // Push the last symbol in line, if the vec is not empty
+        // Especially Important for non Function Containing Files
+        if !lines.is_empty() {
+            let symbol = asm_lines.collect_to_symbol();
+            symbols.insert(symbol.name.clone(), symbol);
+        }
+        let mut outgoing_dirty: Vec<AsmWord> =
+            symbols.values().flat_map(|x| x.outgoing.clone()).collect();
+        outgoing_dirty.sort_unstable();
+        outgoing_dirty.dedup();
+
+        let declared_in_file: Vec<AsmWord> = symbols.keys().cloned().collect();
+
+        let mut outgoing_symbols: Vec<AsmWord> = outgoing_dirty
+            .iter()
+            .filter(|word| !declared_in_file.contains(word))
+            .cloned()
+            .collect();
+
+        AsmFile {
+            name: file.file_name().unwrap().to_owned(),
+            path: file.to_path_buf(),
+            symbols,
+            outgoing_symbols,
+            syntax_global,
+        }
     }
 }
 
-// STD-Trait Implementations
-
-impl Display for AsmEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut output = String::new();
-
-        if let Some(name) = &self.name {
-            output.push_str(format!("{}\tLabel:{}\n", name, self.label).as_str());
-        } else {
-            output.push_str(format!("N/A\tLabel: {}\n", self.label).as_str());
-        }
-        if let Some(byte) = &self.byte {
-            output.push_str(format!("Data:\t\t{:x?}\n", byte).as_str());
-        }
-        if let Some(byte) = &self.byte_as_str {
-            output.push_str(format!("AsString:\t\t{}\n", byte).as_str());
-        }
-
-        output.fmt(f)
-    }
-}
-
-impl IntoIterator for AsmEntries {
+impl IntoIterator for AsmLines {
     type IntoIter = IntoIter<Self::Item>;
-    type Item = AsmEntry;
+    type Item = AsmLine;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()

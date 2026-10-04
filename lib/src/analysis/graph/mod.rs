@@ -1,8 +1,6 @@
-mod tree;
-pub(crate) use tree::*;
 mod asm;
-pub(crate) use asm::*;
 mod node;
+mod tree;
 use std::{
     collections::BTreeMap,
     fmt::Display,
@@ -13,9 +11,11 @@ use std::{
     vec::IntoIter,
 };
 
+pub(crate) use asm::*;
 pub(crate) use node::*;
 use snafu::Whatever;
 use strum::EnumString;
+pub(crate) use tree::*;
 
 use crate::util::io::*;
 
@@ -189,6 +189,17 @@ impl Graph {
         }
     }
 
+    fn get_edges_with_memory_access(&self) -> Edges {
+        self.edges_up
+            .iter()
+            .filter(|(x, _y)| match ***x {
+                GraphNodeWord::Address(_) => true,
+                GraphNodeWord::Symbol(_) => false,
+            })
+            .map(|(x, y)| (x.clone(), y.clone()))
+            .collect()
+    }
+
     fn init_edges(&mut self) {
         let lookup_nodes = self.nodes.clone();
         for node in lookup_nodes.values() {
@@ -301,14 +312,15 @@ impl Graph {
 
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Whatever> {
         let dir = path.as_ref(); // Config Path
-        let tree_dir = dir.join("tree");
+        let tree_dir = dir.join("by_tree");
+        let graph_dir = dir.join("all_nodes");
+        let addr_dir = dir.join("by_address");
 
         // TreePrinting
         for (name, tree) in &self.trees {
-            let level = format!("level_{}", tree.level);
+            // let level = format!("level_{}", tree.level);
             let name = name.to_string();
-            let mut file = tree_dir.join(level);
-            file.push(name);
+            let mut file = tree_dir.join(name);
             file.set_extension("txt");
             let file = create_file_and_dirs(file).expect("cannot create file");
 
@@ -317,6 +329,29 @@ impl Graph {
             let _ = writer.write_fmt(format_args!("{}", tree.print_file()));
         }
         // Remaining Nodes in Graph Printing
+        for (name, node) in &self.nodes {
+            let name = name.to_string();
+            let mut file = graph_dir.join(name);
+            file.set_extension("txt");
+            let file = create_file_and_dirs(file).expect("cannot create file");
+
+            let mut writer = BufWriter::new(file);
+
+            let _ = writer.write_fmt(format_args!("{}", node.print_file()));
+        }
+
+        // Remaining Nodes in Graph Printing
+        for (name, node_vecs) in self.get_edges_with_memory_access() {
+            let name = name.to_string();
+            let mut file = addr_dir.join(name);
+            file.set_extension("txt");
+            let file = create_file_and_dirs(file).expect("cannot create file");
+
+            let mut writer = BufWriter::new(file);
+            for node in node_vecs {
+                let _ = writer.write_fmt(format_args!("{}", node));
+            }
+        }
 
         Ok(())
     }

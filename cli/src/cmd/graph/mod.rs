@@ -1,12 +1,32 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Args;
+use clap::{Args, Subcommand};
 use ds_decomp::analysis::graph::{Graph, GraphOptions};
 
 use crate::util::io::read_dir;
+
 #[derive(Args)]
-pub struct EstreyaComGraphArgs {
+pub struct GraphArgs {
+    #[command(subcommand)]
+    command: GraphCommand,
+}
+
+#[derive(Subcommand)]
+pub enum GraphCommand {
+    Graph(GraphComArgs),
+}
+
+impl GraphArgs {
+    pub fn run(&self) -> Result<()> {
+        match &self.command {
+            GraphCommand::Graph(graph) => graph.run(),
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct GraphComArgs {
     #[arg(long, short = 'c')]
     pub config_path: PathBuf,
     #[arg(long, short = 'a')]
@@ -23,7 +43,7 @@ pub struct EstreyaComGraphArgs {
     pub debug: bool,
 }
 
-impl EstreyaComGraphArgs {
+impl GraphComArgs {
     pub fn run(&self) -> Result<()> {
         let config_path = self.config_path.parent().unwrap();
         if let Ok(files) = Self::dir_crawler(&self.asm_dir) {
