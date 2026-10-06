@@ -51,8 +51,8 @@ impl GraphComArgs {
             let mut graph = Graph::from_files(GraphOptions { debug: self.debug }, files);
             graph.init_nodes();
 
-            for i in 0..self.iterations {
-                graph.find_trees(i)
+            for _ in 0..self.iterations {
+                graph.find_trees();
             }
 
             if self.dry_run {

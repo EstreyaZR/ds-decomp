@@ -1,3 +1,4 @@
+mod addresses;
 mod asm;
 mod node;
 mod tree;
@@ -11,6 +12,7 @@ use std::{
     vec::IntoIter,
 };
 
+pub(crate) use addresses::*;
 pub(crate) use asm::*;
 pub(crate) use node::*;
 use snafu::Whatever;
@@ -19,10 +21,10 @@ pub(crate) use tree::*;
 
 use crate::util::io::*;
 
-type WordVec = Vec<Rc<GraphNodeWord>>;
-type Trees = BTreeMap<Rc<GraphNodeWord>, Tree>;
-type Nodes = BTreeMap<Rc<GraphNodeWord>, GraphNode>;
-type Edges = BTreeMap<Rc<GraphNodeWord>, WordVec>;
+type WordVec = Vec<Rc<AsmWord>>;
+type Trees = BTreeMap<Rc<AsmWord>, Tree>;
+type Nodes = BTreeMap<Rc<AsmWord>, GraphNode>;
+type Edges = BTreeMap<Rc<AsmWord>, WordVec>;
 
 #[allow(unused)]
 pub trait GraphTrait {
@@ -42,10 +44,11 @@ pub trait GraphTrait {
     fn pop_node(&mut self, node: Self::Indexer) -> Option<Self::Item>;
 }
 
-use crate::util::{io::read_to_string, parse::parse_u16};
+use crate::util::io::read_to_string;
 #[derive(Default)]
 pub struct Graph {
     options: GraphOptions,
+    files: Vec<AsmFile>,
     nodes: Nodes,
     edges_up: Edges,
     edges_down: Edges,
@@ -59,7 +62,7 @@ pub struct GraphOptions {
 
 impl GraphTrait for Graph {
     type Edge = Edges;
-    type Indexer = Rc<GraphNodeWord>;
+    type Indexer = Rc<AsmWord>;
     type Item = GraphNode;
 
     // For called_by relations
@@ -122,7 +125,7 @@ impl GraphTrait for Graph {
     }
 
     fn add_node(&mut self, node: Self::Item) {
-        self.nodes.insert(node.name.clone(), node);
+        self.nodes.insert(node.name(), node);
     }
 
     fn pop_node(&mut self, node: Self::Indexer) -> Option<Self::Item> {
@@ -132,29 +135,41 @@ impl GraphTrait for Graph {
 
 impl Graph {
     pub fn init_nodes(&mut self) {
-        self.clean_byte_strings();
-        log::info!("Finished CleanByteStrings");
-
         self.init_edges();
         log::info!("Finished InitEdges");
 
-        self.init_called_by();
-        log::info!("Finished InitCalledBy");
+        self.init_node_connections();
+        log::info!("Finished init_in_connections");
 
         self.init_loops();
-        log::info!("Finished InitLoops");
+        log::info!("Finished init_loops");
 
-        self.resolve_loops();
+        // self.resolve_loops();
+
+        self.init_bytes_to_string();
 
         self.apply_tags();
         log::info!("Finished ApplyTags");
 
-        self.init_tree_status();
-        log::info!("Finished InitTreeStatus");
+        // For later
+        // self.parse_build_info();
+    }
+
+    pub fn parse_build_info(&self) {
+        let build_info = Rc::new(AsmWord::from_str("BuildInfo").unwrap());
+        if let Some(build_info_node) = self.nodes.get(&build_info) {
+            build_info_node.parse_build_info();
+        } else {
+            log::error!("Couldn't find BuildInfo");
+        }
     }
 
     fn resolve_loops(&mut self) {
-        self.nodes.values_mut().for_each(|x| x.remove_loop_with_symbols_in_word());
+        self.nodes.values_mut().for_each(|x| x.resolve_loops());
+    }
+
+    fn init_bytes_to_string(&mut self) {
+        self.nodes.values_mut().for_each(|x| x.init_bytes_to_string());
     }
 
     fn apply_tags(&mut self) {
@@ -163,38 +178,32 @@ impl Graph {
         }
     }
 
-    fn clean_byte_strings(&mut self) {
-        for node in self.nodes.values_mut() {
-            node.clean();
-        }
-    }
-
     fn init_loops(&mut self) {
-        self.nodes.values_mut().for_each(|x| x.init_in_loop_with());
+        self.nodes.values_mut().for_each(|x| x.init_loops());
         if self.options.debug {
             self.nodes.values().for_each(|x| {
                 if !x.call_loop.is_empty() {
-                    log::info!("{:?} in loop with {:?}", x.name, x.call_loop)
+                    log::info!("{:?} in loop with {:?}", x.name(), x.call_loop)
                 }
             });
         }
     }
 
-    fn init_called_by(&mut self) {
+    fn init_node_connections(&mut self) {
         let lookup_edges = self.edges_up.clone();
         for node in self.nodes.values_mut() {
-            if let Some(found_callers) = lookup_edges.get(&node.name) {
-                node.called_by = found_callers.clone();
+            if let Some(found_callers) = lookup_edges.get(&node.name()) {
+                node.in_connection = found_callers.clone();
             }
         }
     }
 
-    fn get_edges_with_memory_access(&self) -> Edges {
+    pub fn get_edges_with_memory_access(&self) -> Edges {
         self.edges_up
             .iter()
             .filter(|(x, _y)| match ***x {
-                GraphNodeWord::Address(_) => true,
-                GraphNodeWord::Symbol(_) => false,
+                AsmWord::Address(_) => true,
+                AsmWord::Symbol(_) => false,
             })
             .map(|(x, y)| (x.clone(), y.clone()))
             .collect()
@@ -203,107 +212,28 @@ impl Graph {
     fn init_edges(&mut self) {
         let lookup_nodes = self.nodes.clone();
         for node in lookup_nodes.values() {
-            if node.word.is_empty() {
+            if node.out_connection.is_empty() {
                 continue;
             } else {
-                let callees = node.word.clone();
+                let callees = node.out_connection.clone();
                 for callee in callees {
-                    self.add_edge(&node.name.clone(), &callee.clone());
+                    self.add_edge(&node.name(), &callee.clone());
                 }
             }
         }
     }
 
-    fn init_tree_status(&mut self) {
-        self.nodes.values_mut().for_each(|node| {
-            if node.tree_type == GraphNodeTreeType::TreeMult
-                || node.tree_type == GraphNodeTreeType::TreeInit
-            {
-                node.tree_type = match node.called_by.len() {
-                    0 => GraphNodeTreeType::TreeRoot,
-                    1 => GraphNodeTreeType::TreeSimple,
-                    2.. => GraphNodeTreeType::TreeMult,
-                }
-            } else {
-                node.update_tree_type();
-            }
-        });
-    }
-
-    pub fn find_trees(&mut self, iteration: u8) {
-        let nodes_in_graph = self.nodes.len();
-        let edges = self.edges_down.clone();
-
-        for (node, vector) in edges.iter() {
-            let simple_nodes: Vec<_> = vector
-                .iter()
-                .filter(|x| {
-                    if let Some(real_node) = self.nodes.get(x.to_owned()) {
-                        real_node.has_tree_type(GraphNodeTreeType::LeafSimple)
-                            || real_node.has_tree_type(GraphNodeTreeType::TreeSimple)
-                    } else {
-                        false
-                    }
-                })
-                .collect();
-            if !simple_nodes.is_empty()
-                && let Some(tree_node) = self.pop_node(node.to_owned())
-            {
-                let mut tree_node = tree_node.clone();
-                let mut tree = Tree::new_from_node(tree_node.clone());
-
-                tree.level = iteration;
-
-                for child in vector {
-                    if let Some(found_child) = self.pop_node(child.to_owned()) {
-                        match found_child.tree_type {
-                            GraphNodeTreeType::TreeSimple => {
-                                if let Some(popped_tree) = self.trees.remove(&found_child.name) {
-                                    tree.consume_tree(popped_tree);
-                                }
-                                tree_node.remove_from_word(&found_child.name);
-                            }
-                            GraphNodeTreeType::LeafSimple => {
-                                tree.add_node(found_child.clone());
-                                tree_node.remove_from_word(&found_child.name);
-                            }
-                            _ => {
-                                self.add_node(found_child);
-                            }
-                        }
-                    }
-                }
-
-                tree_node.tree_type = GraphNodeTreeType::TreeInit;
-                self.add_node(tree_node);
-                self.trees.insert(tree.get_root(), tree);
-            }
-        }
-
-        let nodes_in_graph_new = self.nodes.len();
-
-        if self.options.debug {
-            log::info!(
-                "{} Nodes remain from {} scanned in Source Assembly\nGraph has {} Trees",
-                nodes_in_graph_new,
-                nodes_in_graph,
-                self.trees.len()
-            );
-        }
-        self.init_tree_status();
+    pub fn find_trees(&mut self) {
+        todo!()
     }
 
     pub fn from_files<P: AsRef<Path>>(options: GraphOptions, files: Vec<P>) -> Self {
         let mut nodes: Nodes = BTreeMap::new();
 
         for i in files {
-            let mut entries_vec = GraphNodes::default();
-            if let Ok(entries) = AsmParser::parse(i) {
-                let tmp_nodes = entries.to_nodes();
-                entries_vec.0.extend(tmp_nodes);
-                for i in entries_vec {
-                    nodes.insert(i.name.clone(), i);
-                }
+            let file = AsmParser::parse(i);
+            for (word, symbol) in file.symbols {
+                nodes.insert(word, GraphNode::from(symbol));
             }
         }
 
@@ -311,6 +241,7 @@ impl Graph {
     }
 
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Whatever> {
+        let options = self.options;
         let dir = path.as_ref(); // Config Path
         let tree_dir = dir.join("by_tree");
         let graph_dir = dir.join("all_nodes");
@@ -325,32 +256,6 @@ impl Graph {
             let file = create_file_and_dirs(file).expect("cannot create file");
 
             let mut writer = BufWriter::new(file);
-
-            let _ = writer.write_fmt(format_args!("{}", tree.print_file()));
-        }
-        // Remaining Nodes in Graph Printing
-        for (name, node) in &self.nodes {
-            let name = name.to_string();
-            let mut file = graph_dir.join(name);
-            file.set_extension("txt");
-            let file = create_file_and_dirs(file).expect("cannot create file");
-
-            let mut writer = BufWriter::new(file);
-
-            let _ = writer.write_fmt(format_args!("{}", node.print_file()));
-        }
-
-        // Remaining Nodes in Graph Printing
-        for (name, node_vecs) in self.get_edges_with_memory_access() {
-            let name = name.to_string();
-            let mut file = addr_dir.join(name);
-            file.set_extension("txt");
-            let file = create_file_and_dirs(file).expect("cannot create file");
-
-            let mut writer = BufWriter::new(file);
-            for node in node_vecs {
-                let _ = writer.write_fmt(format_args!("{}", node));
-            }
         }
 
         Ok(())

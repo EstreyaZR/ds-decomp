@@ -18,11 +18,11 @@ pub enum GraphFileType {
 #[derive(Debug, strum_macros::Display, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum GraphNodeTag {
     #[allow(dead_code)]
-    Address,
+    Pointer,
     File(GraphFileType),
     Collection,
 }
-
+#[derive(Debug, Clone)]
 pub struct AsmWordFromStrErr;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Default)]
@@ -34,35 +34,25 @@ impl GraphNodeTags {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct GraphNodes(pub Vec<GraphNode>);
-
 #[derive(Debug, strum_macros::Display, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub enum GraphNodeTreeType {
+pub enum NodeTreeType {
     #[default]
     Init,
     Orphan,
-    LeafSimple,
-    LeafMult,
+    Leaf,
     Root,
-    NodeSimple,
-    NodeMult,
-    TreeRoot,
-    TreeInit,
-    TreeSimple,
-    TreeMult,
+    Node,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct GraphNode {
-    pub name: Rc<AsmWord>,
+    pub symbol: AsmSymbol,
     pub tag: GraphNodeTags,
-    pub byte: Vec<u16>,
-    pub byte_as_str: Vec<String>,
-    pub word: WordVec,
-    pub called_by: WordVec,
+    pub out_connection: WordVec,
+    pub in_connection: WordVec,
     pub call_loop: WordVec,
-    pub tree_type: GraphNodeTreeType,
+    pub tree_type: NodeTreeType,
+    pub bytes_as_str: String,
 }
 
 impl GraphNode {
@@ -70,97 +60,108 @@ impl GraphNode {
     /// please add calls for your tag check functions here,
     /// and your tags to [GraphNodeTag]
     pub fn apply_tags(&mut self) {
-        if self.is_collection() {
-            self.add_tag(GraphNodeTag::Collection);
-        } else if self.is_address() {
-            self.add_tag(GraphNodeTag::Address);
-        } else if let Some(file_type) = self.is_file() {
-            self.add_tag(GraphNodeTag::File(file_type));
+        match self.symbol.asm_type {
+            AsmSymbolType::Data => {
+                self.check_is_file();
+                self.check_is_collection_or_pointer();
+            }
+            AsmSymbolType::ArmFunction | AsmSymbolType::ThumbFunction => {}
+            _ => {
+                todo!()
+            }
         }
     }
 
-    pub fn is_collection(&self) -> bool {
-        !&self.word.is_empty()
-            && self.word.len() != 1
-            && (self.byte.is_empty() || self.byte_are_padding())
+    pub fn name(&self) -> Rc<AsmWord> {
+        self.symbol.name.clone()
     }
 
-    pub fn is_address(&self) -> bool {
-        !&self.word.is_empty() && self.byte.is_empty() && self.word.len() == 1
-    }
-
-    pub fn is_file(&self) -> Option<GraphFileType> {
-        let s = self.byte_as_str.join("");
-        if let Some(s) = s.to_lowercase().split('.').next_back() {
-            return GraphFileType::from_str(s).ok();
+    pub fn check_is_collection_or_pointer(&mut self) {
+        match (self.symbol.content.is_empty(), self.out_connection.len()) {
+            (true, 2..) => {
+                self.add_tag(GraphNodeTag::Collection);
+            }
+            (true, 1) => {
+                self.add_tag(GraphNodeTag::Pointer);
+            }
+            _ => {}
         }
-        None
+    }
+
+    pub fn parse_build_info(&self) {
+        todo!()
+    }
+
+    pub fn init_bytes_to_string(&mut self) {
+        self.bytes_as_str =
+            self.symbol.content.iter().map(|x| String::from_utf8(x.to_owned()).unwrap()).collect();
+    }
+
+    pub fn check_is_file(&mut self) {
+        if let Some(s) = self.bytes_as_str.split('.').next_back() {
+            if let Ok(filetype) = GraphFileType::from_str(s) {
+                self.add_tag(GraphNodeTag::File(filetype));
+            }
+        }
     }
 
     pub fn add_tag(&mut self, tag: GraphNodeTag) {
         self.tag.0.push(tag);
     }
 
-    pub fn has_tree_type(&self, tree_type: GraphNodeTreeType) -> bool {
+    //
+    pub fn has_tree_type(&self, tree_type: NodeTreeType) -> bool {
         self.tree_type == tree_type
     }
 
-    pub fn remove_from_word(&mut self, word: &Rc<AsmWord>) {
-        self.word = self.word.iter().filter(|x| !x.eq(&word)).cloned().collect();
+    pub fn init_loops(&mut self) {
+        self.call_loop = self
+            .out_connection
+            .iter()
+            .filter(|x| self.in_connection.contains(x))
+            .cloned()
+            .collect();
     }
 
-    pub fn remove_from_called_by(&mut self, word: &Rc<AsmWord>) {
-        self.called_by = self.called_by.iter().filter(|x| !x.eq(&word)).cloned().collect();
+    pub fn calls_self(&self) -> bool {
+        self.call_loop.contains(&self.name())
     }
 
-    pub fn init_in_loop_with(&mut self) {
-        self.call_loop = self.word.iter().filter(|x| self.called_by.contains(x)).cloned().collect();
+    /// Removes calls to oneself, as well as any other loops from in_connection. Unused
+    #[allow(dead_code)]
+    pub fn resolve_loops(&mut self) {
+        let selfname = self.name();
+        self.in_connection = self
+            .in_connection
+            .iter()
+            .filter(|x| !x.eq(&&selfname) && !self.call_loop.contains(x.to_owned()))
+            .map(|x| x.to_owned())
+            .collect();
     }
 
-    pub fn remove_loop_with_symbols_in_called_by(&mut self) {
-        self.called_by =
-            self.called_by.iter().filter(|x| !self.call_loop.contains(x)).cloned().collect();
-    }
-
-    pub fn remove_loop_with_symbols_in_word(&mut self) {
-        self.word = self.word.iter().filter(|x| !self.call_loop.contains(x)).cloned().collect();
-    }
-
-    pub fn is_tree(&self) -> bool {
-        match self.tree_type {
-            GraphNodeTreeType::TreeRoot
-            | GraphNodeTreeType::TreeMult
-            | GraphNodeTreeType::TreeSimple
-            | GraphNodeTreeType::TreeInit => true,
-            _ => false,
+    pub fn init_tree_type(&mut self) {
+        match self.symbol.asm_type {
+            AsmSymbolType::Bss(_) => self.tree_type = NodeTreeType::Leaf,
+            _ => {
+                self.update_tree_type();
+            }
         }
     }
 
     pub fn update_tree_type(&mut self) {
-        self.tree_type = match (self.called_by.len(), self.word.len()) {
-            (0, 0) => GraphNodeTreeType::Orphan,
-            (1, 0) => GraphNodeTreeType::LeafSimple,
-            (2.., 0) => GraphNodeTreeType::LeafMult,
-            (0, 1..) => GraphNodeTreeType::Root,
-            (1, 1..) => GraphNodeTreeType::NodeSimple,
-            (2.., 1..) => GraphNodeTreeType::NodeMult,
+        self.tree_type = match (self.in_connection.len(), self.out_connection.len()) {
+            (0, 0) => NodeTreeType::Orphan,
+            (0, 1..) => NodeTreeType::Root,
+            (1.., 0) => NodeTreeType::Leaf,
+            (1.., 1..) => NodeTreeType::Node,
         }
-    }
-
-impl GraphNodes {
-    pub fn push(&mut self, item: GraphNode) {
-        self.0.push(item);
     }
 }
 
-// STD-Trait Implementations
-
-impl IntoIterator for GraphNodes {
-    type IntoIter = IntoIter<Self::Item>;
-    type Item = GraphNode;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+impl From<AsmSymbol> for GraphNode {
+    fn from(value: AsmSymbol) -> Self {
+        let out_connection = value.outgoing.iter().map(|x| Rc::new(x.to_owned())).collect();
+        GraphNode { symbol: value, out_connection, ..Default::default() }
     }
 }
 

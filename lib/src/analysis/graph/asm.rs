@@ -5,14 +5,15 @@
 use std::ffi::OsString;
 
 use super::*;
+use crate::util::parse::parse_u8;
 
 #[derive(Debug)]
 pub struct AsmFile {
     pub name: OsString,
     pub syntax_global: bool,
     pub path: std::path::PathBuf,
-    pub symbols: BTreeMap<AsmWord, AsmSymbol>,
-    pub outgoing_symbols: Vec<AsmWord>,
+    pub symbols: BTreeMap<Rc<AsmWord>, AsmSymbol>,
+    pub outgoing_symbols: Vec<Rc<AsmWord>>,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -55,6 +56,15 @@ impl From<String> for AsmWord {
         match value.strip_prefix("0x") {
             Some(x) => Self::Address(u32::from_str_radix(x, 16).unwrap()),
             None => Self::Symbol(value),
+        }
+    }
+}
+
+impl AsmWord {
+    pub fn get_address(&self) -> Option<u32> {
+        match self {
+            AsmWord::Address(addr) => Some(*addr),
+            _ => None,
         }
     }
 }
@@ -121,7 +131,7 @@ impl AsmLines {
         let mut name = AsmWord::default();
         let mut asm_type = AsmSymbolType::default();
         let mut outgoing: Vec<AsmWord> = Vec::new();
-        let mut content:
+        let mut content: Vec<Vec<u8>> = Vec::new();
 
         for line in self.0.drain(..) {
             match line.asm_type {
@@ -148,17 +158,14 @@ impl AsmLines {
                         outgoing.push(word);
                     }
                 }
-                AsmType::Byte => {
-
-                }
-
+                AsmType::Byte => content.push(line.get_byte_as_vec()),
                 _ => {
                     todo!()
                 }
             }
         }
 
-        AsmSymbol { global, name, asm_type, outgoing }
+        AsmSymbol { global, name: Rc::new(name), asm_type, outgoing, content }
     }
 
     pub fn push(&mut self, line: &AsmLine) {
@@ -168,10 +175,11 @@ impl AsmLines {
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct AsmSymbol {
-    name: AsmWord,
-    global: bool,
-    asm_type: AsmSymbolType,
-    outgoing: Vec<AsmWord>,
+    pub name: Rc<AsmWord>,
+    pub global: bool,
+    pub asm_type: AsmSymbolType,
+    pub outgoing: Vec<AsmWord>,
+    pub content: Vec<Vec<u8>>,
 }
 
 impl AsmLine {
@@ -235,15 +243,15 @@ impl AsmLine {
         let mut name = self.content[1].clone();
         AsmWord::from(name.trim_end_matches(':').to_string())
     }
-}
 
-// pub fn byte_as_str(&self) -> String {
-//     if let Some(byte_as_str) = &self.byte_as_str {
-//         byte_as_str.to_string()
-//     } else {
-//         String::new()
-//     }
-// }
+    pub fn get_byte_as_vec(&self) -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        for num in &self.content[1..] {
+            v.push(parse_u8(num).unwrap());
+        }
+        v
+    }
+}
 
 impl AsmParser {
     pub fn parse<P: AsRef<Path>>(file: P) -> AsmFile {
@@ -323,12 +331,12 @@ impl AsmParser {
         outgoing_dirty.sort_unstable();
         outgoing_dirty.dedup();
 
-        let declared_in_file: Vec<AsmWord> = symbols.keys().cloned().collect();
+        let declared_in_file: Vec<_> = symbols.keys().cloned().collect();
 
-        let mut outgoing_symbols: Vec<AsmWord> = outgoing_dirty
+        let mut outgoing_symbols: Vec<_> = outgoing_dirty
             .iter()
+            .map(|x| Rc::new(x.to_owned()))
             .filter(|word| !declared_in_file.contains(word))
-            .cloned()
             .collect();
 
         AsmFile {
